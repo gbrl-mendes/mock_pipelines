@@ -1,0 +1,22 @@
+### 08/2025 First version of BCFTools pipeline for eDNA metabarcoding
+
+#### Data acquistion
+
+Organize all fastq files of each run in a single folder
+
+```{bash}
+#
+mkdir -p \
+~/projetos/analises/bcftools_pipe/reads/run_01mar21/fastq/all \
+~/projetos/analises/bcftools_pipe/reads/run_09fev21/fastq/all \
+~/projetos/analises/bcftools_pipe/reads/run_29jul20/fastq/all
+```
+
+Move all fastq files to a single folder
+
+```{bash}
+for run in run_01mar21 run_09fev21 run_29jul20; do
+  cp /home/heron/runs/$run/fastq/all/*fastq.gz \
+  ~/projetos/analises/bcftools_pipe/reads/$run/fastq/all/
+done
+```

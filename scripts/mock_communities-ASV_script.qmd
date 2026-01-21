@@ -1,0 +1,1891 @@
+---
+title: "Mock Communities ASV analyses"
+author: "Gabriel A. Mendes"
+format: html
+editor: visual
+editor_options: 
+  chunk_output_type: console
+---
+
+# Mock Communities ASV versus MOTUs project - ASV analyses
+
+## 1. Setup & Configuration
+
+### Packages
+
+-   **Load libraries.** Import all necessary packages for data manipulation, demultiplex, ASVs inference, taxonomy assigment and data visualization.
+
+    ```{r}
+    library(tidyverse)
+    library(phyloseq)
+    library(Biostrings)
+    library(ShortRead)
+    library(dada2)
+    library(DECIPHER)
+    library(future)
+    ```
+
+### Directory Management
+
+-   **Create directory structure.** Define project paths and ensure folders for scripts, results, figures, and tables exist.
+
+    ```{r}
+    # Base path  
+    prjct_path <- "/home/gabriel/projetos/mock_pipelines"
+
+    # Derived paths
+    {
+      data_path <- paste0(prjct_path, "/data")
+      pipe_libs <- paste0(data_path, "/reads")
+      raw_libs <- paste0(pipe_libs, "/raw")
+      paired_libs <- paste0(pipe_libs, "/paired")
+      cutadapt_libs <- paste0(pipe_libs, "/cutadapt")
+      qual_path <- paste0(prjct_path, "/quality")
+      results_path <- paste0(prjct_path, "/results")
+      blast_path <- paste0(results_path, "/blast")
+      swarm_path <- paste0(results_path, "/swarm")
+      dmx_path <- paste0(pipe_libs, "/dmx")
+      dmx_all_path <- paste0(dmx_path, "/all_dmx")
+      dmx_combined_path <- paste0(dmx_path, "/all_combined")
+    }
+
+    # Paths to be created
+    paths <- c(prjct_path, data_path, pipe_libs, raw_libs, 
+             paired_libs, cutadapt_libs, qual_path, results_path,
+             blast_path, swarm_path, dmx_path, dmx_all_path, 
+             dmx_combined_path)
+
+    for (dir in paths) {
+      if (dir.exists(dir)) {
+    print(paste("The folder", dir, "already exists!"))
+      } else {
+    print(paste("Creating", dir, "!" ))
+    dir.create(dir) 
+      }
+    }
+
+    list.files(prjct_path)
+    ```
+
+### Housekeeping
+
+-   **Define custom functions.**
+
+    ```{r}
+    # Convert IUPAC codes to regex. Enables searching degenerate primers directly on reads.
+    iupac2seq <- function(dna_seq) {
+      iupac_code <- c("A" = "A", "C" = "C", "G" = "G", "T" = "T",
+                      "Y" = "[CT]", "R" = "[AG]", "H" = "[ACT]", "M" = "[AC]",
+                      "K" = "[GT]", "S" = "[GC]", "W" = "[AT]", "B" = "[CGT]",
+                      "D" = "[AGT]", "V" = "[ACG]", "N" = "[ACGT]")
+      stringr::str_replace_all(dna_seq, iupac_code)
+    }
+
+    # Counts how many reads in a FASTQ file contain a given primer (allowing up to 1 mismatch)
+    primerHits <- function(primer, file_name) {
+      nhits <- Biostrings::vcountPattern(primer,
+                                         ShortRead::sread(ShortRead::readFastq(file_name)),
+                                         fixed        = FALSE,
+                                         max.mismatch = 1)
+      sum(nhits > 0)
+      }
+
+    # Applies primerHits to a set of primers for one FASTQ file and returns a table of counts per primer
+    multi_primerHits <- function(Read_file, primers) {
+      primer_counts <- purrr::map_df(primers,
+                                     .f = primerHits,
+                                     file_name = Read_file)
+      primer_counts %>%
+        dplyr::mutate(`Read file` = Read_file)
+    }
+
+    # Generates all 4 orientations (FWD/REV/COMP/REVCOMP) for a single primer
+        allOrients <- function(primers_list) {
+      require(Biostrings)
+      
+      dna <- Biostrings::DNAString(primers_list$`Primer seq`)
+      
+      orients <- 
+        c(Forward= dna,
+          Complement = Biostrings::complement(dna),
+          Reverse    = Biostrings::reverse(dna),
+          RevComp    = Biostrings::reverseComplement(dna))
+      
+      primer_tbl <- sapply(orients, toString)
+      
+      primer_tbl <- 
+        tibble::tibble(Sequence = primer_tbl,
+                       `Primer orientation` = names(primer_tbl)) %>%
+        dplyr::mutate(Primer = primers_list$`Primer name`) %>%
+        tidyr::unite(col = "Orientation name",
+                     Primer,
+                     `Primer orientation`,
+                     remove = FALSE) %>%
+        dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "__.*.$"),
+                      `Parsed sequence` = iupac2seq(Sequence))
+      
+      base::names(primer_tbl$Sequence) <- primer_tbl$`Orientation name`
+      
+      primer_tbl
+      }
+    ```
+
+-   **Load custom functions.** Custom functions for taxonomy retrievel.
+
+    ```{r}
+    # Demultiplex custom function
+    source("/home/heron/prjcts/ecomol/R/dmx_metabar.R")
+    ```
+
+-   **Define Global Color Palettes.** Set consistent color schemes for TERMINAR.
+
+    ```{r}
+    # Color for each read situation 
+    read_colors <- c("Raw reads (pairs)" = "#7A0403FF",
+                     "Raw reads (R1)" = "#B11901FF",
+                     "Raw reads (R2)" = "#B11901FF",
+                     "Paired reads" = "#F25F14FF",
+                     "Primer detected reads" = "#FE942AFF",
+                     "Primer detected reads (R1)" = "#F7C13AFF",
+                     "Primer detected reads (R2)" = "#F7C13AFF",
+                     "Repaired reads" = "#DAE336FF",
+                     "Denoised (R1)" = "#AFFA37FF",
+                     "Denoised (R2)" = "#AFFA37FF",
+                     "Merged" ="#76FE5BFF",
+                     "Non-chimeric Merged" ="#34F395FF",
+                     "Concatenated" = "#2DB6F1FF",
+                     "Non-chimeric Concatenated" = "#458AFCFF",
+                     "R1 + R2" = "#4145AAFF",
+                     "Non-chimeric R1 + R2" = "#3A2C78FF")
+
+    # Plot identified ASVs
+    colors <- c("#330000", "darkred", "red", 
+                "yellow", "green", "darkgreen")
+
+    # BLAST Score Gradient (Low to High quality)
+    blast_score_palette <- c("#330000", "darkred", "red", 
+                             "yellow", "green", "darkgreen")
+
+    # Metazoa Status (True/False)
+    metazoa_palette <- c("TRUE" = "steelblue", "FALSE" = "firebrick") 
+
+    # Shapes for Superkingdoms
+    taxa_shapes <- c("Archaea" = 25, "Bacteria" = 24, 
+                     "Eukaryota" = 21, "Viruses" = 23)
+    ```
+
+### Load Samples table
+
+This is the most important input on the analysis, along with the raw data. The *Samples Table* holds the information of the samples file names, primers, controls, indexes, different projects. An example of this table can be found. *After filling in the table, save it as .csv an place it on the data folder, inside the project's main directory.*
+
+-   Load primers indexes and samples table
+
+    ```{r}
+    primers_n_samples <- 
+      readr::read_csv(file = "~/projetos/mock_pipelines/data/mock_primer_n_samples.csv")
+
+    primers_n_samples %>% 
+      View()
+    ```
+
+-   Check if file names are really unique
+
+    ```{r}
+    if (nrow(primers_n_samples) != length(unique(primers_n_samples$Unique_File_name))) {
+      print("Your file names are not unique")
+      print(paste0("The file names:"))
+      print(paste0(primers_n_samples$Unique_File_name[duplicated(primers_n_samples$Unique_File_name)], collapse = "\n "))
+      print(paste0("apear more than once"))
+      } else if (nrow(primers_n_samples) != length(unique(primers_n_samples$Sample))) {
+        print("Your Sample names are not unique")
+        print(paste0("The sample names:"))
+        cat(paste0(primers_n_samples$Sample[duplicated(primers_n_samples$Sample)], collapse = "\n "))
+        print(paste0("apear more than once"))
+        } else {
+          print("All file names and sample names are unique!")
+          }
+    ```
+
+-   Defining all separate projects to analyze independently
+
+    ```{r}
+    all_projects <- 
+      BiocGenerics::unique(primers_n_samples$Project) %>%
+      stringr::str_split(pattern = ";", simplify = F) %>%
+      base::unlist() %>%
+      BiocGenerics::unique()
+
+    paste0("This analysis will by split into separate projects for:", paste0(c("\t", all_projects), collapse = "\n\t")) %>% 
+    cat() %>% 
+    message()
+    ```
+
+-   Identify files names radicals and levels
+
+    ```{r}
+    # if you need to print sample names and sort them yourself ----
+    primers_n_samples$Unique_File_name %>% 
+      paste0(collapse = '",\n"') %>% cat()
+
+    # organize sample names in the order they will be printed on plots and results tables ----
+    # sample_levels <- c(primers_n_samples$Unique_File_name) %>% unique()
+    sample_levels <- 
+      c(primers_n_samples$Sample) %>% unique()
+
+    sample_levels
+    ```
+
+## 2. Raw Data Pre-processing
+
+The second phase of the pipeline focuses on the pre-processing and diagnostics of the raw sequencing reads. Before proceeding to ASV inference, it is critical to assess read quality (via FastQC/MultiQC) and validate primer presence and orientation. These diagnostic analyses ensure data integrity and inform the parameters required for the subsequent filtering and cleaning steps.
+
+### Raw data aquisition
+
+-   **Get reads from Base Space.** This part is only required if your read files is on Basespace. If the read files are already downloaded and demultiplexed, place them on the *\$raw_libs* folder and proceed to the next section.
+
+    ```{bash}
+    # Navigate to raw files folder 
+    cd  /home/gabriel/projetos/mock_pipelines/data/reads/raw;
+
+    # Download run from BaseSpace ----
+    # a - autenticate to basespace (must have a basespace account and shared projects/runs)
+    bs auth;
+
+    # 2b - list your projects data ----
+    bs list datasets;
+
+    # 2c - download multiplexed read files
+    for id in $(cat ids.txt); \ do bs download dataset --id $id -o data/reads/raw --extension=fastq.gz; done
+    ```
+
+### Demultiplexing
+
+-   **Run demultiplexing function.** Iterates over libraries in the configuration table (`primers_n_samples`) and applies the custom `dmx_metabar` function to split samples using the index information.
+
+-   This stage its not needed because the samples are within different libraries.
+
+    ```{r}
+    # Identify all unique libraries
+    all_Libs <- unique(primers_n_samples$Lib)
+
+    # Loop over libraries and run demultiplexing
+    for (LIB in all_Libs) {
+      
+     # Filter metadata for current library
+    lib_metadata <- primers_n_samples %>%
+      dplyr::filter(Lib == LIB)
+      
+    # Define raw R1/R2 file paths
+    raw_files <- lib_metadata$`Undemultiplexed path` %>%
+      unique() %>%
+      list.files(full.names = TRUE) %>%
+      Sys.glob() %>%
+      normalizePath()
+      
+    # Set project parameters
+    out_path <- unique(lib_metadata$`Raw data path`)
+    project  <- unique(lib_metadata$Project)
+
+    # Run demultiplexing
+    dmx_metabar(undmx_file_R1 = raw_files[1],
+                undmx_file_R2 = raw_files[2],
+                out_path = out_path,
+                project = project,
+                Unique_File_name = lib_metadata$Unique_File_name,
+                primers = lib_metadata$Primer,
+                samples_names = lib_metadata$Sample,
+                idxs_FWD_seqs = lib_metadata$`Index sequence FWD`,
+                idxs_FWD_names  = lib_metadata$`Index name FWD`,
+                idxs_REV_seqs = lib_metadata$`Index sequence REV`,
+                idxs_REV_names  = lib_metadata$`Index name REV`,
+                query_size  = 12)
+    }
+    ```
+
+### Quality checking
+
+-   **Check that demultiplexed files exist.** Confirms that the paths in `primers_n_samples` actually contain FASTQ files before running FastQC/MultiQC.
+
+    ```{r}
+    read_files <- 
+      primers_n_samples %>%
+      dplyr::mutate(Read_file_pattern = file.path(`Raw data path`,
+                                                  paste0(Unique_File_name, "*"))) %>%
+      dplyr::pull(Read_file_pattern) %>%
+      Sys.glob() %>%
+      normalizePath() %>%
+      unique()
+
+    if (length(read_files) > 0) {
+      message(length(read_files), " read files found for QC.")
+      } else {
+        stop("No read files found for QC. Check `Raw data path` and file names.")
+        }
+    ```
+
+-   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
+
+    ```{r}
+    for (PRJ in all_projects) {
+      # Create output directories
+      fastqc_path  <- file.path(qual_path, PRJ, "fastqc")
+      multiqc_path <- file.path(qual_path, PRJ, "multiqc")
+      
+      dir.create(fastqc_path,  recursive = TRUE, showWarnings = FALSE)
+      dir.create(multiqc_path, recursive = TRUE, showWarnings = FALSE)
+      
+      # Filter reads belonging to this project
+      raw_path <- 
+        primers_n_samples$`Raw data path`[primers_n_samples$Project == PRJ] %>%
+        unique()
+      
+      project_reads <- 
+        read_files[stringr::str_detect(read_files, paste0(raw_path, collapse = "|"))]
+      
+      # 1. Run FastQC (requires GNU parallel + FastQC installed)
+            cmd_fastqc <- paste0(
+              "echo '", paste(project_reads, collapse = "\n"), "' | ",
+              "parallel fastqc {1} -t 20 -o ", fastqc_path)
+            system(cmd_fastqc)
+            
+      # 2. Run MultiQC
+            cmd_multiqc <- paste0(
+              "multiqc --interactive ",
+              fastqc_path, " --filename ",
+              file.path(multiqc_path,
+                        paste0(PRJ, "--sequencing_quality-MultiQC_report.html")))
+            system(cmd_multiqc)
+            }
+    ```
+
+### Primer detection Analysis
+
+#### Identify paired-end read files
+
+-   **Map R1/R2 reads to samples.** Builds a table linking each `Unique_File_name` to the corresponding R1/R2 FASTQ files and to future paired‑output paths.
+
+    ```{r}
+    # Base directory of the read files (assumes all reads share the same root as the first file)
+    data_dir <- dirname(read_files)
+
+    # List all forward (R1) FASTQ files using common naming patterns
+    all_fnFs <-
+      list.files(data_dir,
+                 pattern   = "_R1_001.fastq|_R1_001.fastq.gz|\\.1.fastq|\\.R1.fastq|R1.fq|R1.fastq|1.fq.gz|-R1.fastq.gz",
+                 full.names = TRUE) %>%
+      sort()
+
+    # List all reverse (R2) FASTQ files using common naming patterns
+    all_fnRs <-
+      list.files(data_dir,
+                 pattern   = "_R2_001.fastq|_R2_001.fastq.gz|\\.2.fastq|\\.R2.fastq|R2.fq|R2.fastq|2.fq.gz|-R2.fastq.gz",
+                 full.names = TRUE) %>%
+      sort()
+
+    # Initialize sample table with metadata and empty columns for R1/R2 paths
+    sample_idx_tbl_wide <-
+      primers_n_samples %>%
+      dplyr::select("Unique_File_name", "Lib", "Run", "Project",
+                    "Researcher", "Sample", "Primer", "Type",
+                    "Raw data path", dplyr::ends_with("ontrol")) %>%
+      dplyr::mutate(FWD_R1 = NA_character_,
+                    FWD_R2 = NA_character_)
+
+    # For each sample, find the corresponding R1 and R2 files by matching path + Unique_File_name
+    for (i in seq_len(nrow(sample_idx_tbl_wide))) {
+      pattern_i <- 
+        paste0(sample_idx_tbl_wide$`Raw data path`[i], "/",
+               sample_idx_tbl_wide$Unique_File_name[i], "_")
+      
+      # Match forward read (R1) file
+      sample_idx_tbl_wide$FWD_R1[i] <- 
+        all_fnFs[BiocGenerics::grep(pattern_i, all_fnFs)] %>%
+        BiocGenerics::unique() %>% .[1]
+      
+      # Match reverse read (R2) file
+      sample_idx_tbl_wide$FWD_R2[i] <- 
+        all_fnRs[BiocGenerics::grep(pattern_i, all_fnRs)] %>%
+        BiocGenerics::unique() %>% .[1]
+      }
+
+    # Add paths for the future paired-output files and reshape to long format
+    sample_idx_tbl <- 
+      sample_idx_tbl_wide %>%
+      dplyr::mutate(FWD_R1_paired = file.path(paired_libs,
+                                              paste0(Unique_File_name, "--FWD_R1_paired.fastq.gz")),
+                    FWD_R2_paired = file.path(paired_libs,
+                                              paste0(Unique_File_name, "--FWD_R2_paired.fastq.gz"))) %>%
+      tidyr::pivot_longer(
+        cols = c(FWD_R1, FWD_R2, FWD_R1_paired, FWD_R2_paired),
+        names_to  = "Stage",
+        values_to = "Read file") %>%
+      dplyr::mutate(Unique_File_name_Primer = Unique_File_name)
+    ```
+
+-   **Primer database.** Primer names and sequences (with IUPAC codes where applicable). Comments are retained only where they document the biological identity of the primers.
+
+    ```{r}
+    # Define master vector of active primers (uncomment lines to activate specific primer pairs)
+    all_primers <- 
+      c(NeoFish_FWD = "CGCCGTCGCAAGCTTACCCT",
+        NeoFish_REV = "AGTGACGGGCGGTGTGTGC",
+        MiFish_FWD = "GTCGGTAAAACTCGTGCCAGC",
+        MiFish_REV = "ACATAGTGGGGTATCTAATCCCAGTTTG"
+        # MiBird__FWD = "GGGTTGGTAAATCTTGTGCCAGC",
+        # MiBird__REV = "CATAGTGGGGTATCTAATCCCAGTTTG",
+        # MiFish variants (12S, fishes)
+        # MiFishEM__FWD  = "GTCGGTAAAACTCGTGCCAGC", 
+        # MiFishEMs__FWD = "GTCGGTAAAACTCGTGCCAGC",
+        # MiFish__FWD    = "AAACTCGTGCCAGC",       
+        # MiFish2__REV   = "CATAGTGGGGTATCTAATCCCAGTTTG",
+        # MiFishEMs__REV = "CATAGTGGGGTATCTAATCCCAGTT",
+        # MiFishEM__REV  = "CATAGTGGGGTATCTAATCCCAGTTTG",
+        # MiFish__REV    = "TCTAATCCCAGTTTG",
+        # p12SV5__FWD = "TTAGATACCCCACTATGC",
+        # p12SV5__REV = "TAGAACAGGCTCCTCTAG",
+        # V12Su__FWD = "GTGCCAGCNRCCGCGGTYANAC",
+        # V12Su__REV = "ATATRGGGTATCTAATCCYAGT",
+        # V16Su__FWD = "ACGAGAAGACCCYRYGRARCTT",
+        # V16Su__REV = "TCTHRRANAGGATTGCGCTGTTA",
+        # VCOIu__FWD = "CAYGCHTTTGTGNATRATYYTYTT",
+        # VCOIu__REV = "GGRGGRTADACDGTYCANCCNGT"
+        # (Other primer pairs can be re‑added here following the same pattern)
+        ) %>% 
+      stats::na.omit()
+
+    # Convert primer vector to list of single-row tibbles (for allOrients function)
+    primers_list <- tibble::tibble(
+      `Primer seq`  = all_primers,
+      `Primer name` = names(all_primers)) %>%
+      split(1:nrow(.))
+
+    # Create reference table with IUPAC → Regex conversion for inspection
+    all_primers_tbl <- tibble::tibble(
+      Primer = names(all_primers),
+      `IUPAC sequence` = all_primers) %>%
+      dplyr::mutate(`Regex sequence` = iupac2seq(`IUPAC sequence`))
+    ```
+
+-   **Generate all primer orientations** Produces all orientations (Forward/Reverse/Complement/RevComp.) and their regex representation for downstream searching.
+
+    ```{r}
+    # Apply all Orients to all primers and clean final table
+    primers_all_orients <- 
+      purrr::map_dfr(primers_list, allOrients) %>%
+      dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "__.*.$"))
+    ```
+
+-   **Per‑file primer hits.** Counts the number of reads that contain a given primer pattern (with up to 1 mismatch).
+
+    ```{r}
+    # Select only raw forward reads (R1/R2) for primer detection
+    reads_seqs_tbl <- 
+      sample_idx_tbl %>%
+      dplyr::filter(Stage %in% c("FWD_R1", "FWD_R2")) %>%
+      dplyr::select(`Read file`, Unique_File_name)
+
+    # Create named vector of FASTQ paths (names = sample identifiers)
+    reads_seqs <- reads_seqs_tbl$`Read file`
+    names(reads_seqs) <- reads_seqs_tbl$Unique_File_name
+
+    # Extract all primer sequences as named vector for counting
+    primers_seqs <- primers_all_orients %>%
+      dplyr::pull(Sequence, name = `Orientation name`)
+
+    # Set up parallel processing (all cores minus 2)
+    cores_to_use <- future::availableCores() - 2
+    future::plan(future::multisession(workers = cores_to_use))
+
+    # Count primer occurrences across all files x all primers (parallel)
+    primers_in_Nreads <- furrr::future_map_dfr(reads_seqs, 
+                                               .f = multi_primerHits,
+                                               primers = primers_seqs,
+                                               .options = furrr::furrr_options(seed = NULL))
+
+    # Join with sample metadata and calculate total reads per file
+    primers_in_Nreads <- 
+      primers_in_Nreads %>%
+      dplyr::left_join(sample_idx_tbl, by = "Read file") %>%
+      dplyr::mutate(Read = dplyr::if_else(stringr::str_detect(Stage, "R1"), "R1", "R2")) %>%
+      tidyr::unite(col = "Unique_File_name_Read",
+                   Unique_File_name,
+                   Read,
+                   sep = " ",
+                   remove = FALSE) %>%
+      dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = `Read file`)[, 1])
+    ```
+
+#### Primers identified in each sample
+
+-   **Prepare data.** Transform the primer hits table into a long format suitable for visualization with ggplot2. This step filters out unobserved primers and organizes metadata.
+
+    ```{r}
+    # Prepare primer counts for plots in ggplot
+
+    # Check available orientation names (for debugging)
+    # primers_all_orients$`Orientation name`
+
+    # Print column names formatted for selection (helper for coding)
+    # primers_in_Nreads %>% colnames() %>% paste0(collapse = '",\n') %>% cat()
+
+    # Convert primer hits table to long format
+    primers_in_Nreads_long <- primers_in_Nreads %>% 
+      dplyr::select(!dplyr::ends_with(c("_Complement", "_Reverse"))) %>% 
+      tidyr::gather(
+    key = Sequences, 
+    value = Count, 
+    ends_with("FWD_Forward"),
+    ends_with("FWD_RevComp"),
+    ends_with("REV_Forward"),
+    ends_with("REV_RevComp")
+      ) %>% 
+      dplyr::mutate(
+    Sequences = as.factor(Sequences),
+    Unique_File_name = factor(Unique_File_name, levels = sample_levels)
+      ) %>% 
+      dplyr::select(-c("Read file", "Stage")) %>% 
+      # Remove columns that are entirely NA
+      dplyr::select(where(function(x) any(!is.na(x)))) %>% 
+      # Filter out primers with zero counts
+      dplyr::filter(Count != 0)
+    ```
+
+-   **Configure plot settings.** Load necessary visualization libraries and define the factor levels for sample ordering in the plots.
+
+    ```{r}
+    # Load visualization libraries
+    library(viridis)
+    library(ggh4x)
+
+    # Create levels for Files display on plot based on the prepared data
+    Unique_File_name_Read_levels <- primers_in_Nreads_long %>% 
+      dplyr::pull(Unique_File_name_Read) %>% 
+      base::unique()
+    ```
+
+-   **Generate and save plots.** Iterate through each project to create specific primer abundance plots. The loop filters data per project, generates a tile/bar plot showing primer presence and proportion, and saves the output as a PDF.
+
+    ```{r}
+    # Loop through all projects defined in the workflow
+    for (PRJ in all_projects) {
+
+      options(scipen = 10000)
+
+      # 1. Filter and prepare data ONCE for the current project
+      # This avoids filtering the large dataset multiple times inside the loop
+      project_data <- primers_in_Nreads_long %>% 
+    dplyr::filter(Project == PRJ) %>% 
+    dplyr::mutate(
+      # Pre-format labels and calculate percentages to keep ggplot clean
+      Sequences_lbl = stringr::str_replace_all(Sequences, "__|_", "\n"),
+      Primer_lbl    = stringr::str_replace_all(Primer, ";", "\n"),
+      Pct_Reads     = (Count / `Total reads` * 100)
+    )
+      
+      # 2. Calculate dynamic dimensions based on actual data
+      n_samples <- length(unique(project_data$Unique_File_name_Read))
+      n_primers <- length(unique(project_data$Primer))
+
+      # 3. Create the plot object
+      primers_tile <- project_data %>%
+    ggplot2::ggplot(aes(y = Unique_File_name_Read)) +
+    # Bar layer
+    ggplot2::geom_bar(
+      aes(
+        x = `Total reads`,
+        fill = Pct_Reads,
+        color = Primer,
+        group = Sequences
+      ), 
+      stat = "identity",
+      position = "dodge",
+      linewidth = 0.05, 
+      linetype = 2,
+      alpha = 0.5
+    ) +
+    # Text labels for counts
+    ggplot2::geom_text(
+      aes(x = `Total reads`, label = Count), 
+      hjust = 0, size = 1
+    ) +
+    # Color scales
+    ggplot2::scale_fill_gradientn(
+      name = "Proportion of reads\n     with primer (%)",
+      colours = c("white", "red", "yellow", "green", "dark green"),
+      values = c(0, 1),
+      na.value = "white"
+    ) +
+    # Axes and Guides
+    ggplot2::scale_y_discrete(limits = rev) +
+    ggplot2::scale_x_log10(
+      breaks = c(10, 100, 1000, 10000, 100000),
+      expand = expansion(mult = c(0, 0.2))
+    ) +
+    ggplot2::scale_alpha(guide = 'none') +
+    ggplot2::guides(color = guide_legend(override.aes = list(fill = "white", size = 10))) +
+
+    # Theme adjustments
+    ggplot2::theme_light(base_line_size = 0.025, base_size = 6) +
+    ggplot2::theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      strip.text.y = element_text(size = 10),
+      plot.title = element_text(size = 10),
+      plot.subtitle = element_text(size = 6),
+      legend.text = element_text(size = 5),
+      legend.title = element_text(size = 7)
+    ) + 
+    # Dynamic horizontal lines based on actual sample count
+    ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2), color = "darkgrey") +
+
+    # Titles and Facets
+    ggplot2::labs(
+      title = PRJ,
+      subtitle = "Presença de primers nas amostras:\n    intensidade de cor relativa à     contagem do respectivo primer no conjunto de reads\n(max. mismatch = 1)",
+      x = "Primers",
+      y = "Amostra"
+    ) +
+    ggplot2::facet_grid(
+      rows = vars(Primer_lbl),
+      cols = vars(Sequences_lbl),
+      scales = "free",
+      space = "free"
+    )
+
+      # 4. Save the plot
+      ggplot2::ggsave(
+    file = paste0(results_path, "/", PRJ, "-primers_found_in_reads_1e.pdf"),
+    plot = primers_tile,
+    device = "pdf",
+    width = 10 + (n_primers * 10),
+    height = (n_samples * 0.3) + 3,
+    units = "cm",
+    limitsize = FALSE,
+    dpi = 300
+      )
+    }
+    ```
+
+-   **Check orientations.** Analyze the generated plots to confirm if primers appear in the correct read files and orientations. For short amplicons (e.g., ITS) where read-through occurs, correct orientation is critical:
+
+    -   **FWD Primer:** Should appear in Forward Reads (R1) in 'Forward' orientation and potentially in Reverse Reads (R2) in 'RevComp' orientation.
+
+    -   **REV Primer:** Should appear in Reverse Reads (R2) in 'Forward' orientation and potentially in Forward Reads (R1) in 'RevComp' orientation.
+
+    -   **Troubleshooting:** Orientation mixups are common. If, for example, the REV primer is matching the Reverse Reads in its 'RevComp' orientation (instead of 'Forward'), you must replace the input primer sequence with its reverse-complement before proceeding.
+
+-   **Embed PDF results.** Dynamically list and display the generated PDF plots within the HTML report.
+
+    ```{r}
+    # Extract the PDF path from the R object
+    pdf_info <- list.files(
+      path = results_path, # Using the variable results_path for consistency
+      pattern = "primers_found_in_reads",
+      full.names = TRUE
+    )
+
+    # Generate the iframe HTML code
+    if(length(pdf_info) > 0) {
+      cat(paste0('<iframe src="', pdf_info, '" width="1200" height="800"></iframe>'))
+    } else {
+      cat("No primer plots found.")
+    }
+    ```
+
+## 3. DADA2 ASV Workflow
+
+This section executes the core DADA2 workflow to infer Amplicon Sequence Variants (ASVs) from the pre-processed reads. The process begins with strict quality filtering and the physical removal of primers using Cutadapt. Next, a run-specific error model is learned, which underpins the denoising algorithm designed to distinguish true biological variants from sequencing errors. The pipeline concludes by merging paired reads, constructing the sequence table, and removing chimeras, resulting in a high-resolution ASV table analogous to a traditional OTU table.
+
+### Filter and Trim Reads
+
+-   **Prepare file paths.** Identify paired-end read files that contain primers and organize their paths for the filtering step.
+
+    ```{r}
+    # Select files with identified primers and reshape to wide format for processing
+    primer_paired_files <- sample_idx_tbl %>% 
+      dplyr::filter(stringr::str_detect(
+        string = Stage,
+        pattern = "FWD_R1|FWD_R2|FWD_R1_paired|FWD_R2_paired"
+      )) %>% 
+      tidyr::pivot_wider(
+        id_cols = c("Unique_File_name", "Primer", "Lib"),
+        names_from = "Stage",
+        values_from = "Read file"
+      )
+
+    # Verify basenames (optional check)
+    # primer_paired_files$FWD_R1 %>% BiocGenerics::basename()
+    # primer_paired_files$FWD_R1_paired %>% basename()
+    ```
+
+-   **Define filtering function.** Create a wrapper function for dada2::filterAndTrim to handle forward and reverse reads, applying quality thresholds and removing PhiX.
+
+    ```{r}
+    # Custom function to repair and filter reads using DADA2
+    repairNfilt_with_DADA2 <- function(Unique_File_name,
+                                       FWD_R1_in,
+                                       FWD_R2_in,
+                                       FWD_R1_out,
+                                       FWD_R2_out) {
+      
+      # Check if input files exist
+      if (file.exists(FWD_R1_in) && file.exists(FWD_R2_in)) {
+        
+        # Run filterAndTrim
+        # Note: maxN=0 is strict but standard for DADA2; maxEE=20 is very loose,
+        # typical for raw data prep before denoising, but check if maxEE=2 or 5 is better    for your data.
+        sample_filtered_out <- dada2::filterAndTrim(
+          fwd = FWD_R1_in,
+          filt = FWD_R1_out,
+          rev = FWD_R2_in,
+          filt.rev = FWD_R2_out,
+          maxN = c(0, 0),
+          maxEE = c(20, 20),
+          multithread = TRUE, # Internal multithreading of the function
+          matchIDs = TRUE,
+          rm.phix = TRUE,
+          compress = TRUE,
+          minLen = 30,
+          verbose = FALSE
+        )
+        
+        # Format output
+        tibble::as_tibble(sample_filtered_out) %>%
+          dplyr::mutate(Unique_File_name = Unique_File_name)
+          
+      } else {
+        warning(paste("Missing files for:", Unique_File_name))
+        return(tibble::tibble())
+      }
+    }
+    ```
+
+-   **Execute filtering.** Run the filtering function in parallel across all samples and generate a summary table of read retention.
+
+    ```{r}
+    # Setup parallel processing
+    # Using available cores minus 2 to avoid system freeze
+    cores_to_be_used <- future::availableCores() - 2 
+    future::plan(future::multisession(workers = cores_to_be_used))
+
+    # Run filtering in parallel
+    tictoc::tic()
+
+    # Note: We use furrr::future_pmap or similar if we wanted fully tidy parallel,
+    # but passing vectors to a function as done originally works if the function is     vectorized
+    # or if we map over it.
+    # The original code passed vectors directly to 'repairNfilt_with_DADA2'. 
+    # However, 'filterAndTrim' is vectorized for file paths.
+    # Since the custom function processes one set of 4 paths at a time, we must map over     it.
+
+    all_filtered_out_fun <- furrr::future_pmap_dfr(
+      list(
+        primer_paired_files$Unique_File_name,
+        primer_paired_files$FWD_R1,
+        primer_paired_files$FWD_R2,
+        primer_paired_files$FWD_R1_paired,
+        primer_paired_files$FWD_R2_paired
+      ),
+      .f = repairNfilt_with_DADA2,
+      .options = furrr::furrr_options(seed = TRUE)
+    )
+
+    tictoc::toc()
+
+    # Generate summary table
+    all_filtered_out <- all_filtered_out_fun %>% 
+      dplyr::mutate(
+        Proportion = round((reads.out / reads.in * 100), digits = 2)
+      ) %>% 
+      dplyr::rename(
+        "Raw reads (pairs)" = "reads.in",
+        "Paired reads"      = "reads.out"
+      )
+
+    # View result
+    all_filtered_out
+    ```
+
+### Remove Primers with Cutadapt
+
+The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequences from reads, handling read-through scenarios typical of variable-length amplicons like ITS.
+
+-   **Configure output paths.** Map sample names to new Cutadapt output filenames, ensuring separation by primer set if necessary.
+
+    ```{r}
+    # Map sample names to cutadapt output files ----
+    paired_files_per_primer <- sample_idx_tbl %>% 
+      dplyr::filter(Stage %in% c("FWD_R1_paired", "FWD_R2_paired")) %>% 
+      dplyr::filter(file.exists(`Read file`))
+
+    # Generate output paths by replacing 'paired' with 'cutadapt'
+    cut_files_per_primer <- paired_files_per_primer %>%  
+      dplyr::mutate(
+        Stage = gsub(Stage, pattern = "_paired", replacement = "_cutadapt"),
+        `Read file` = stringr::str_replace_all(
+          string = `Read file`,
+          pattern = "paired", 
+          replacement = "cutadapt"
+        )
+      )
+
+    # Separate paths by primer if multiple primers exist per sample (optional, based on     logic)
+    cut_files_per_primer <- cut_files_per_primer %>% 
+      tidyr::separate_longer_delim(cols = "Primer", delim = ";") %>% 
+      dplyr::mutate(`Read file` = dplyr::case_when(
+        Stage %in% c("FWD_R1_cutadapt", "FWD_R2_cutadapt") ~ stringr::str_replace_all(
+          string = `Read file`,
+          pattern = paste0(cutadapt_libs, "/"),
+          replacement = paste0(cutadapt_libs, "/", Primer, "--")
+        ),
+        TRUE ~ `Read file`
+      ))
+
+    # Combine input (paired) and output (cutadapt) metadata
+    cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     paired_files_per_primer)
+    ```
+
+-   **Execute Cutadapt.** Iterate through each primer set, generate the appropriate clipping flags (including reverse complements for read-through), and execute the Cutadapt system command for paired-end reads.
+
+    ```{r}
+    # Identify unique primer sets to process
+    primer_sets <- primers_all_orients$`Primer pair` %>% 
+      BiocGenerics::unique()
+
+    # Loop through each primer set to run Cutadapt
+    for (PRIMER_SET in primer_sets) {
+      
+      # 1. Select primer sequences for this set ----
+      # Using grep to find specific orientation keys constructed in 'allOrients' function
+      
+      # Forward primer (for R1 5')
+      fwd_seq <- primers_all_orients$Sequence[
+        grep(paste0(PRIMER_SET, "__FWD_Forward"), primers_all_orients$`Orientation name`)
+      ]
+      
+      # Reverse complement of Reverse primer (for R1 3' read-through)
+      rev_rc_seq <- primers_all_orients$Sequence[
+        grep(paste0(PRIMER_SET, "__REV_RevComp"), primers_all_orients$`Orientation name`)
+      ]
+      
+      # Reverse primer (for R2 5')
+      rev_seq <- primers_all_orients$Sequence[
+        grep(paste0(PRIMER_SET, "__REV_Forward"), primers_all_orients$`Orientation name`)
+      ]
+      
+      # Reverse complement of Forward primer (for R2 3' read-through)
+      fwd_rc_seq <- primers_all_orients$Sequence[
+        grep(paste0(PRIMER_SET, "__FWD_RevComp"), primers_all_orients$`Orientation name`)
+      ]
+
+      # 2. Construct Cutadapt Flags ----
+      # -g: Anchor FWD to start of R1; -a: Remove REV_RC from end of R1
+      R1_flags <- paste0("-g ", fwd_seq, " -a ", rev_rc_seq)
+      
+      # -G: Anchor REV to start of R2; -A: Remove FWD_RC from end of R2
+      R2_flags <- paste0("-G ", rev_seq, " -A ", fwd_rc_seq)
+
+      # 3. Prepare File Lists ----
+      # Filter samples belonging to this primer set and pivot to wide format
+      PRIMER_SET_files <- cut_files_per_primer %>%
+        dplyr::filter(stringr::str_detect(Primer, PRIMER_SET)) %>%
+        tidyr::pivot_wider(
+          id_cols = c("Unique_File_name", "Unique_File_name_Primer"),
+          names_from = "Stage",
+          values_from = "Read file"
+        )
+
+      # Define vectors for Input (Paired) and Output (Cutadapt) files
+      # Ensure only existing input files are processed
+      valid_indices <- file.exists(PRIMER_SET_files$FWD_R1_paired) & 
+                       file.exists(PRIMER_SET_files$FWD_R2_paired)
+      
+      fnFs_in  <- PRIMER_SET_files$FWD_R1_paired[valid_indices]
+      fnRs_in  <- PRIMER_SET_files$FWD_R2_paired[valid_indices]
+      fnFs_out <- PRIMER_SET_files$FWD_R1_cutadapt[valid_indices]
+      fnRs_out <- PRIMER_SET_files$FWD_R2_cutadapt[valid_indices]
+
+      # 4. Run System Command ----
+      # Iterate over valid file pairs
+      if (length(fnFs_in) > 0) {
+        for (i in seq_along(fnFs_in)) {
+          
+          # Execute cutadapt
+          system2(
+            command = cutadapt, # Ensure 'cutadapt' path var is defined in Setup
+            args = c(
+              R1_flags,
+              R2_flags,
+              "-e 0.1",       # Max error rate 10%
+              "-j 0",         # Auto-detect cores (use 0 for max available, or set     specific number)
+              "-n 2",         # Remove up to 2 adapters per read (5' and 3')
+              "-o", fnFs_out[i],
+              "-p", fnRs_out[i],
+              fnFs_in[i],
+              fnRs_in[i],
+              "--minimum-length 30",
+              "--discard-untrimmed",
+              "--match-read-wildcards",
+              "--pair-filter=both"
+            )
+          )
+        }
+      } else {
+        message(paste("No valid input files found for primer set:", PRIMER_SET))
+      }
+    }
+    ```
+
+### Repair Paired Reads
+
+-   **Sync paired-end files.** Ensure R1 and R2 files remain synchronized after Cutadapt processing, discarding orphans.
+
+    ```{r}
+    # Map Cutadapt output to 'repaired' file paths ----
+    repair_files_per_primer <- cut_files_per_primer %>% 
+      dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>% 
+      dplyr::filter(file.exists(`Read file`)) %>% 
+      tidyr::pivot_wider(
+    id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
+    names_from = "Stage",
+    values_from = "Read file"
+      ) %>% 
+      dplyr::mutate(
+    FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
+    FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")
+      ) %>% 
+      tidyr::unite(
+    col = "Unique_File_name_Primer", 
+    sep = "--", 
+    remove = FALSE,
+    Unique_File_name, Primer
+      )
+
+    # Execute repair in parallel ----
+    # Uses the same filtering function but essentially just resynchronizes pairs
+    tictoc::tic()
+
+    all_filtered_out_fun_repaired2 <- furrr::future_pmap_dfr(
+      list(
+    repair_files_per_primer$Unique_File_name_Primer,
+    repair_files_per_primer$FWD_R1_cutadapt,
+    repair_files_per_primer$FWD_R2_cutadapt,
+    repair_files_per_primer$FWD_R1_repaired,
+    repair_files_per_primer$FWD_R2_repaired
+      ),
+      .f = repairNfilt_with_DADA2, # Reusing the wrapper function
+      .options = furrr::furrr_options(seed = TRUE)
+    )
+
+    tictoc::toc()
+
+    # Summarize repair results ----
+    all_repaired <- all_filtered_out_fun_repaired2 %>% 
+      dplyr::rename(
+    "Unique_File_name_Primer" = "Unique_File_name",
+    "Primer detected reads"   = "reads.in",
+    "Repaired reads"          = "reads.out"
+      ) %>% 
+      dplyr::mutate(Proportion = round((`Repaired reads` / `Primer detected reads` * 100), digits = 2)) %>% 
+      BiocGenerics::unique()
+
+    all_repaired
+    ```
+
+### Learn Error Rates and Infer ASVs
+
+-   **Process by sequencing run.** DADA2 error models must be learned separately for each sequencing run. This step iterates through runs to learn errors, dereplicate reads, and infer ASVs.
+
+    ```{r}
+    # Initialize containers for DADA2 objects
+    all_dadaFs <- list()
+    all_dadaRs <- list()
+    all_derep_forward <- list()
+    all_derep_reverse <- list()
+
+    # Loop through each sequencing run ----
+    for (seq in unique(primers_n_samples$Run)) {
+      
+      message(paste0("Processing Run: ", seq))
+      
+      # 1. Get file lists for this run ----
+      seq_files <- repair_files_per_primer %>%
+    dplyr::filter(Run == seq) %>%
+    dplyr::filter(file.exists(FWD_R1_repaired) & file.exists(FWD_R2_repaired))
+
+      seq_fnFs <- seq_files$FWD_R1_repaired
+      seq_fnRs <- seq_files$FWD_R2_repaired
+      names(seq_fnFs) <- seq_files$Unique_File_name_Primer
+      names(seq_fnRs) <- seq_files$Unique_File_name_Primer
+      
+      # 2. Learn Error Rates ----
+      # Using nbases=1e9 (1 billion bases) is usually sufficient and faster than 1e16
+      seq_errF <- dada2::learnErrors(
+    fls = seq_fnFs, multithread = TRUE, randomize = TRUE, verbose = TRUE
+      )
+      seq_errR <- dada2::learnErrors(
+    fls = seq_fnRs, multithread = TRUE, randomize = TRUE, verbose = TRUE
+      )
+      
+      # Visualize errors (optional, saved to plot list if needed, here just printed)
+      print(dada2::plotErrors(seq_errF, nominalQ = TRUE) + ggplot2::ggtitle(paste("Forward Errors -", seq)))
+      print(dada2::plotErrors(seq_errR, nominalQ = TRUE) + ggplot2::ggtitle(paste("Reverse Errors -", seq)))
+
+      # 3. Dereplication ----
+      seq_derep_forward <- dada2::derepFastq(seq_fnFs, verbose = TRUE)
+      seq_derep_reverse <- dada2::derepFastq(seq_fnRs, verbose = TRUE)
+      
+      # 4. Sample Inference (DADA2 Algorithm) ----
+      seq_dadaFs <- dada2::dada(seq_derep_forward, err = seq_errF, multithread = TRUE)
+      seq_dadaRs <- dada2::dada(seq_derep_reverse, err = seq_errR, multithread = TRUE)
+      
+      # Append to global lists
+      # Note: lists are appended directly. If 'seq_dadaFs' is a list of objects, c() combines them flatly.
+      all_dadaFs <- c(all_dadaFs, seq_dadaFs)
+      all_dadaRs <- c(all_dadaRs, seq_dadaRs)
+      all_derep_forward <- c(all_derep_forward, seq_derep_forward)
+      all_derep_reverse <- c(all_derep_reverse, seq_derep_reverse)
+    }
+    ```
+
+### Construct Sequence Table and Remove Chimeras
+
+-   **Merge paired reads.** Combine forward and reverse reads to reconstruct the full amplicon.
+
+    ```{r}
+    # Merge read pairs
+    all_mergers <- dada2::mergePairs(
+      dadaF = all_dadaFs,
+      derepF = all_derep_forward,
+      dadaR = all_dadaRs,
+      derepR = all_derep_reverse,
+      minOverlap = 10,
+      maxMismatch = 0,
+      verbose = TRUE
+    )
+
+    # Construct Sequence Table (ASV table
+    mergers_seqtab <- dada2::makeSequenceTable(all_mergers)
+
+    # Check ASV length distribution
+    table(nchar(dada2::getSequences(mergers_seqtab)))
+    ```
+
+-   **Remove chimeras.** Identify and remove artifactual chimeric sequences.
+
+    ```{r}
+    # Remove Chimeras
+    mergers_seqtab_nochim <- dada2::removeBimeraDenovo(
+      mergers_seqtab, 
+      method = "consensus", 
+      multithread = TRUE, 
+      verbose = TRUE
+    )
+
+    # Calculate chimera removal stats
+    chimera_prop <- sum(mergers_seqtab_nochim) / sum(mergers_seqtab)
+    message(paste0("Retained ", round(chimera_prop * 100, 2), "% of reads after chimera removal."))
+
+    # Inspect final length distribution
+    table(nchar(dada2::getSequences(mergers_seqtab_nochim)))
+    ```
+
+### Track Read Retention
+
+-   **Compile statistics.** Gather read counts from every processing step (Raw -\> Paired -\> Repaired -\> Denoised -\> Merged -\> Non-chimeric) to assess pipeline quality.
+
+    ```{r}
+    # Helper function to extract counts from DADA objects
+    getN <- function(x) sum(dada2::getUniques(x))
+
+    # Extract counts for DADA2 steps
+    tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN), name = "Unique_File_name_Primer", value = "Denoised (R1)")
+    tbl_Denoised_R2 <- tibble::enframe(sapply(all_dadaRs, getN), name = "Unique_File_name_Primer", value = "Denoised (R2)")
+    tbl_Merged <- tibble::enframe(rowSums(mergers_seqtab), name = "Unique_File_name_Primer", value = "Merged")
+    tbl_NonChim <- tibble::enframe(rowSums(mergers_seqtab_nochim), name = "Unique_File_name_Primer", value = "Non-chimeric Merged")
+
+    # Combine with previous stats
+    # (Assumes 'all_filtered_out' and 'all_repaired' exist from previous chunks)
+
+    # Prepare base table from Repaired stats
+    all_track <- all_repaired %>%
+      tidyr::separate(Unique_File_name_Primer, into = c("Unique_File_name", "Primer"), sep = "--", remove = FALSE) %>%
+      dplyr::left_join(all_filtered_out, by = "Unique_File_name") %>%
+      dplyr::left_join(tbl_Denoised_R1, by = "Unique_File_name_Primer") %>%
+      dplyr::left_join(tbl_Denoised_R2, by = "Unique_File_name_Primer") %>%
+      dplyr::left_join(tbl_Merged, by = "Unique_File_name_Primer") %>%
+      dplyr::left_join(tbl_NonChim, by = "Unique_File_name_Primer") %>%
+      dplyr::left_join(primers_n_samples, by = "Unique_File_name") # Add metadata
+
+    # Save stats to Excel
+    for (PRJ in all_projects) {
+      prj_track <- all_track %>% dplyr::filter(Project == PRJ)
+      writexl::write_xlsx(
+    prj_track,
+    path = file.path(results_path, paste0(PRJ, "-reads_and_seqs_counts-", Sys.Date(), ".xlsx"))
+      )
+    }
+
+    # (Optional: Visualization code would follow here, using 'track_tbl' logic from original script)
+    ```
+
+## 4. Phyloseq Integration (ou Downstream Analysis?)
+
+### Generate Sample Metadata
+
+-   **Format metadata table.** Prepare the sample metadata by organizing identifiers and ensuring row names match the sequence table, a requirement for Phyloseq.
+
+    ```{r}
+    # Create sample metadata dataframe for Phyloseq
+    samdf <- primers_n_samples %>% 
+      dplyr::select(
+    Project, Sample, Researcher, Unique_File_name, Primer, Lib, Type,
+    dplyr::starts_with("Metadata"),
+    obs, `Extraction control`, `PCR control`, `Filtration control`
+      ) %>% 
+      BiocGenerics::unique() %>%
+      # Expand rows if multiple primers exist per sample (semi-colon separated)
+      tidyr::separate_longer_delim(cols = Primer, delim = ";") %>% 
+      # Create unique identifier combining file name and primer
+      tidyr::unite(
+    col = "Unique_File_name_Primer", 
+    Unique_File_name, Primer, 
+    sep = "--", 
+    remove = FALSE
+      ) %>%
+      as.data.frame()
+
+    # Assign row names to match ASV table dimensions
+    rownames(samdf) <- samdf$Unique_File_name_Primer
+
+    # Optional: Preview metadata structure
+    # str(samdf)
+
+    # Check consistency between sequence table and metadata
+    seq_names <- rownames(mergers_seqtab_nochim)
+    meta_names <- rownames(samdf)
+
+    if (!all(seq_names %in% meta_names)) {
+      warning("Caution: Some samples in the sequence table are missing from metadata!")
+      print(setdiff(seq_names, meta_names))
+    } else {
+      message("All samples matched correctly between Sequence Table and Metadata.")
+    }
+    ```
+
+### Create Phyloseq Objects
+
+-   **Import DADA2 results.** Combine the ASV table (no-chimera) and the formatted sample data into a Phyloseq object.
+
+    ```{r}
+    # Create Phyloseq object from DADA2 results
+    # Note: 'mergers_seqtab_nochim' comes from the DADA2 workflow section
+    mergers_ps <- phyloseq::phyloseq(
+      phyloseq::otu_table(mergers_seqtab_nochim, taxa_are_rows = FALSE),
+      phyloseq::sample_data(samdf)
+      # phyloseq::tax_table(taxa_matrix) # Add taxonomy here if available later
+    )
+
+    # If concatenation was used (optional workflow branch), creating its object:
+    # concat_ps <- phyloseq::phyloseq(
+    #   phyloseq::otu_table(concat_seqtab_nochim, taxa_are_rows = FALSE),
+    #   phyloseq::sample_data(samdf)
+    # )
+    ```
+
+### Melt and Combine for Visualization
+
+-   **Transform to tidy format.** Convert the Phyloseq object into a long-format tibble (psmelt), filtering out zero-abundance ASVs to optimize file size and plotting performance.
+
+    ```{r}
+    # Convert Phyloseq object to long tibble
+    mergers_ps_tbl <- phyloseq::psmelt(mergers_ps) %>% 
+      tibble::as_tibble() %>% 
+      dplyr::mutate(`Read origin` = "merged") %>% 
+      dplyr::filter(Abundance > 0) %>% # Filter strictly positive abundance
+      dplyr::rename(ASV = OTU, ASV_tip = OTU) # Keep ASV sequence as identifier
+
+    # (Optional) Process concatenated data if it exists
+    # concat_ps_tbl <- ...
+
+    # Combine all processed tables (if multiple sources exist) ----
+    all_ps_tbl <- mergers_ps_tbl %>%
+      # dplyr::bind_rows(concat_ps_tbl) %>% # Uncomment to join multiple sources
+      dplyr::select(-Sample) %>%  # Remove duplicate/confusing columns if necessary
+      dplyr::rename(Sample = sample_Sample) %>% # Standardize Sample column name
+      dplyr::mutate(`ASV Size (bp)` = nchar(ASV))
+
+    # View final tidy table
+    # head(all_ps_tbl)
+    ```
+
+### Calculate Relative Abundances
+
+-   **Compute relative abundances.** Calculate the proportion of each ASV relative to the total library size and the total dataset. This normalization is crucial for comparing samples with unequal sequencing depths.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Calculate relative abundances per sample and project
+    all_ps_tbl <- all_ps_tbl %>%
+      # Calculate Total Abundance of the entire dataset once
+      dplyr::mutate(Dataset_Total_Abundance = sum(Abundance)) %>%
+      # Group by sample context to calculate sample-specific totals
+      dplyr::group_by(Project, Unique_File_name, Primer, `Read origin`) %>%
+      dplyr::mutate(
+    Sample_Total_Abundance = sum(Abundance),
+    Relative_Abundance_Dataset = round((Abundance / Dataset_Total_Abundance), digits = 6),
+    Relative_Abundance_Sample  = round((Abundance / Sample_Total_Abundance), digits = 6)
+      ) %>%
+      dplyr::ungroup() %>%
+      # Clean up temporary total column if desired, or keep for checks
+      dplyr::select(-Dataset_Total_Abundance) %>%
+      dplyr::relocate(Sample_Total_Abundance, Relative_Abundance_Dataset, Relative_Abundance_Sample, .after = Abundance)
+    ```
+
+### Check ASV Length Distribution
+
+-   **Visualize ASV lengths.** Inspect the distribution of ASV lengths before taxonomic assignment. This helps identify potential artifacts or non-target amplicons.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Plot ASV length distribution by sample
+    # Define color palette if not already defined globally
+    # viridis_pal <- viridis::turbo(n = 12)
+
+    asv_length_plot <- all_ps_tbl %>%
+      ggplot2::ggplot(aes(
+    y = interaction(`Read origin`, Unique_File_name),
+    x = `ASV Size (bp)`,
+    fill = `Read origin`,
+    col = `Read origin`,
+    size = Relative_Abundance_Sample,
+    alpha = 0.25
+      )) +
+      ggplot2::geom_jitter(height = 0.3, width = 0.3) +
+      ggplot2::scale_x_continuous(
+    breaks = seq(20, max(all_ps_tbl$`ASV Size (bp)`, na.rm = TRUE), 10),
+    expand = c(0.02, 0.02)
+      ) +
+      ggplot2::scale_fill_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
+      ggplot2::scale_colour_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
+      ggplot2::labs(
+    x = "ASV Size (bp)",
+    y = "Sample",
+    title = "ASV Length Distribution by Sample",
+    subtitle = "Size and Read Origin per Sample (all identified ASVs)"
+      ) +
+      ggplot2::theme_bw(base_size = 8) +
+      ggplot2::theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text.y = element_text(size = 10, angle = 0)
+      ) +
+      ggplot2::geom_vline(xintercept = c(10, max(all_ps_tbl$`ASV Size (bp)`, na.rm = TRUE))) +
+      ggplot2::facet_grid(
+    rows = vars(Project, Primer, Type),
+    scales = 'free_y', 
+    space = 'free_y'
+      )
+
+    # Save plot
+    # ggsave(...) # Add your ggsave logic here as needed
+    ```
+
+## 5. Taxonomic Assignment (BLASTn)
+
+This section performs taxonomic identification of ASVs using local BLAST databases.
+
+### Prepare and Execute BLASTn
+
+-   **Select unique ASVs.** Extract unique sequences from the dataset for identification to avoid redundant BLAST searches.
+
+    ```{r}
+    # Prepare unique ASVs list
+    asvs_blast_all <- all_ps_tbl %>%
+      dplyr::pull(ASV_tip) %>% 
+      unique() %>% 
+      stats::na.omit() %>% 
+      as.character()
+
+    # Optional: Check for artifacts (poly-N runs)
+    # which(stringr::str_detect(asvs_blast_all, "NNNNNNN"))
+    ```
+
+-   **Run Parallel BLAST.** Execute BLASTn in batches using the `BLASTr` package to handle large datasets efficiently without overloading memory.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Define BLAST Parameters
+    # Load BLASTr (ensure it is installed)
+    # devtools::install_github("heronoh/BLASTr", force = TRUE)
+    library(BLASTr)
+
+    # Define chunk size for batch processing (e.g., 20,000 sequences per batch)
+    chunk_size <- 20000
+    asv_chunks <- split(asvs_blast_all, ceiling(seq_along(asvs_blast_all) / chunk_size))
+
+    # Define databases path (adjust as needed)
+    db_paths <- "/data/databases/core_nt/core_nt /data/databases/LGC12Sdb/mai25/LGC12Sdb_complete_noGaps-2025-05-21.fasta"
+
+    # Execute BLASTn in Batches
+    blast_results_list <- list()
+
+    tictoc::tic("Total BLASTn taxonomy assignment")
+
+    for (i in seq_along(asv_chunks)) {
+      
+      message(paste("Processing BLAST chunk", i, "of", length(asv_chunks)))
+      
+      chunk_res <- BLASTr::parallel_blast(
+    db_path = db_paths,
+    query_seqs = asv_chunks[[i]],
+    out_file = file.path(blast_path, paste0("blast_out_res_", i, ".csv")),
+    out_RDS  = file.path(blast_path, paste0("blast_out_res_", i, ".RDS")),
+    total_cores = 60,       # Adjust based on server capacity
+    num_threads = 2,
+    blast_type = "blastn",
+    perc_id = 80,
+    perc_qcov_hsp = 80,
+    num_alignments = 3
+      )
+      
+      blast_results_list[[i]] <- chunk_res
+      
+      # Optional: Save intermediate environment
+      # save.image(...) 
+    }
+
+    tictoc::toc()
+
+    # Combine Results
+    blast_res_full <- dplyr::bind_rows(blast_results_list) %>% 
+      dplyr::filter(!is.na(`1_subject header`)) %>% 
+      dplyr::rename(ASV_tip = Sequence)
+
+    # View summary
+    # head(blast_res_full)
+    ```
+
+### Correct Database TaxIDs (LGC12Sdb)
+
+-   **Map missing TaxIDs.** For custom databases like LGC12Sdb, fill in missing TaxIDs using an external mapping file.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Load TaxID mapping file
+    lgc_taxid_file <- "/data/databases/LGC12Sdb/oct24/LGC12Sdb_complete_noGaps-2024-09-20.txt"
+
+    if (file.exists(lgc_taxid_file)) {
+      
+      LGC12db_tax_IDs <- read.csv(
+    file = lgc_taxid_file,
+    sep = " ",
+    col.names = c("1_subject", "1_staxid"),
+    header = FALSE,
+    check.names = FALSE
+      ) %>%
+    tibble::as_tibble() %>%
+    dplyr::mutate(`1_staxid` = as.character(`1_staxid`)) %>%
+    unique()
+
+      # Apply correction
+      blast_res_full <- blast_res_full %>%
+    # Convert N/A text to real NA
+    dplyr::mutate(`1_staxid` = dplyr::if_else(`1_staxid` == "N/A", NA_character_, `1_staxid`)) %>%
+    # Join with mapping file to find missing IDs
+    dplyr::left_join(LGC12db_tax_IDs, by = "1_subject", suffix = c("", "_mapped")) %>%
+    # Coalesce: keep original if exists, otherwise take mapped
+    dplyr::mutate(`1_staxid` = dplyr::coalesce(`1_staxid`, `1_staxid_mapped`)) %>%
+    dplyr::select(-`1_staxid_mapped`)
+
+    } else {
+      warning("LGC TaxID mapping file not found. Skipping TaxID correction.")
+    }
+
+    # Check final TaxID distribution
+    # table(blast_res_full$`1_staxid`, useNA = "always")
+    ```
+
+## 6. Taxonomy Curation & Assignment
+
+This section refines the raw BLAST results, retrieves complete lineage information from NCBI, and standardizes taxonomic ranks.
+
+### Refine BLAST Hits
+
+-   **Filter low-quality hits.** Remove uninformative descriptions (e.g., "Uncultured") and select the best reliable hit among the top 3 alignments.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Define patterns for non-informative hits
+    bad_res_ids <- paste0(c(
+      "Uncultured", "Uncultured organism", "Uncultured prokaryote",
+      "Eukaryotic synthetic construct", "16S rRNA amplicon fragment",
+      "Invertebrate environmental", "Uncultured Candidatus",
+      "Uncultured bacterium", "Uncultured archaeon",
+      "Complete Metagenome-Assembled", "PREDICTED: Nomascus"
+    ), collapse = "|")
+
+    # Vectorized selection of best hit (1st, 2nd, or 3rd)
+    blast_res_processed <- blast_res_full %>%
+      dplyr::mutate(
+    # Check reliability of each hit
+    is_bad_1 = stringr::str_detect(`1_subject header`, bad_res_ids),
+    is_bad_2 = stringr::str_detect(`2_subject header`, bad_res_ids),
+    is_bad_3 = stringr::str_detect(`3_subject header`, bad_res_ids),
+
+    # Select best valid hit
+    Selected_Hit_Origin = dplyr::case_when(
+      !is_bad_1 ~ "1",
+      is_bad_1 & !is.na(`2_subject header`) & !is_bad_2 ~ "2",
+      is_bad_1 & is_bad_2 & !is.na(`3_subject header`) & !is_bad_3 ~ "3",
+      TRUE ~ "None"
+    ),
+
+    # Assign Final ID and TaxID based on selection
+    `blast ID` = dplyr::case_when(
+      Selected_Hit_Origin == "1" ~ substr(`1_subject header`, 1, 40),
+      Selected_Hit_Origin == "2" ~ substr(`2_subject header`, 1, 40),
+      Selected_Hit_Origin == "3" ~ substr(`3_subject header`, 1, 40),
+      TRUE ~ "Match_not_reliable"
+    ),
+
+    query_taxID = dplyr::case_when(
+      Selected_Hit_Origin == "1" ~ `1_staxid`,
+      Selected_Hit_Origin == "2" ~ `2_staxid`,
+      Selected_Hit_Origin == "3" ~ `3_staxid`,
+      TRUE ~ NA_character_
+    )
+      ) %>%
+      # Second pass clean-up for any lingering "Uncultured" that slipped through
+      dplyr::mutate(
+    `blast ID` = dplyr::if_else(
+      stringr::str_detect(`blast ID`, "ncultur|nvironmental"),
+      "Match_not_reliable",
+      `blast ID`
+    )
+      )
+
+    # Check results
+    # table(blast_res_processed$Selected_Hit_Origin)
+    ```
+
+### Clean Species Names
+
+-   **Standardize nomenclature.** Clean up species names by removing artifacts, tags (e.g., "cf.", "aff."), and reducing names to Binomial format (Genus species).
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Clean strings
+    blast_res_processed <- blast_res_processed %>%
+      dplyr::mutate(
+    `blast ID` = `blast ID` %>%
+      stringr::str_replace(": ", ":") %>%
+      stringr::str_remove("\\n$") %>%
+      stringr::str_remove("^(  | |Uncultured |uncultured |Candidatus |MAG:|TPA_asm:|^Cf. |candidate division )") %>%
+      stringr::str_remove_all("\\[|\\]") %>%
+      stringr::str_replace("cf\\. ", "") %>%
+      stringr::str_replace("nr\\. ", "") %>%
+      stringr::str_replace(",", "") %>%
+      # Extract only the first two words (Genus species)
+      stringr::word(1, 2) %>%
+      # Handle specific manual corrections
+      dplyr::case_match(
+        "Human DNA" ~ "Homo sapiens",
+        "Human chromosome" ~ "Homo sapiens",
+        .default = .
+      )
+      )
+
+    # Verify cleaned names
+    # head(unique(blast_res_processed$`blast ID`))
+    ```
+
+### Retrieve Lineage from NCBI
+
+-   **Fetch complete taxonomy.** Query NCBI using the valid TaxIDs to retrieve full lineage information (Kingdom to Species).
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Identify unique TaxIDs to query
+    taxids_to_search <- unique(na.omit(blast_res_processed$query_taxID))
+
+    # Execute parallel taxonomy retrieval
+    # Note: Ensure BLASTr is loaded. Using 'parallel_get_tax' from the package.
+    # devtools::load_all("~/prjcts/BLASTr") # Only if local dev version needed
+
+    taxonomy_tbl <- BLASTr::parallel_get_tax(
+      organisms_taxIDs = taxids_to_search,
+      retry_times = 5,
+      verbose = "full"
+    ) %>% 
+      BiocGenerics::unique()
+
+    # Check for missing IDs (failed queries)
+    missing_taxids <- setdiff(taxids_to_search, taxonomy_tbl$query_taxID)
+    if (length(missing_taxids) > 0) {
+      message(paste(length(missing_taxids), "TaxIDs could not be retrieved."))
+    }
+    ```
+
+### Fill Missing Ranks
+
+-   **Impute missing levels.** Fill gaps in the taxonomic tree (e.g., missing Family) by propagating information from higher ranks with a prefix (e.g., "family of Order X").
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Function to fill missing ranks iteratively
+    fill_rank <- function(df, target_rank, source_rank, prefix) {
+      df[[target_rank]] <- ifelse(
+    is.na(df[[target_rank]]) | df[[target_rank]] == "",
+    paste0(prefix, df[[source_rank]]),
+    df[[target_rank]]
+      )
+      return(df)
+    }
+
+    # Apply filling logic
+    taxonomy_tbl_filled <- taxonomy_tbl %>%
+      # Manual Superkingdom corrections based on Kingdom/Phylum
+      dplyr::mutate(
+    `Superkingdom (NCBI)` = dplyr::case_when(
+      is.na(`Superkingdom (NCBI)`) & `Kingdom (NCBI)` %in% c("Metazoa", "Fungi", "Viridiplantae") ~ "Eukaryota",
+      is.na(`Superkingdom (NCBI)`) & stringr::str_detect(`Phylum (NCBI)`, "bacteria$") ~ "Bacteria",
+      TRUE ~ `Superkingdom (NCBI)`
+    )
+      ) %>%
+      # Fill NAs sequentially (top-down)
+      fill_rank("Superkingdom (NCBI)", "Kingdom (NCBI)", "superkingdom of ") %>%
+      fill_rank("Kingdom (NCBI)", "Superkingdom (NCBI)", "kingdom of ") %>%
+      fill_rank("Phylum (NCBI)", "Kingdom (NCBI)", "phylum of ") %>%
+      fill_rank("Class (NCBI)", "Phylum (NCBI)", "class of ") %>%
+      fill_rank("Order (NCBI)", "Class (NCBI)", "order of ") %>%
+      fill_rank("Family (NCBI)", "Order (NCBI)", "family of ") %>%
+      fill_rank("Genus (NCBI)", "Family (NCBI)", "genus of ")
+
+    # Merge taxonomy back to BLAST results
+    blast_res_tax <- dplyr::left_join(
+      blast_res_processed,
+      taxonomy_tbl_filled,
+      by = "query_taxID"
+    )
+
+    # Join back to Main ASV Table
+    all_ps_tbl_final <- dplyr::left_join(
+      all_ps_tbl,
+      blast_res_tax %>% dplyr::select(ASV_tip, `blast ID`, `Superkingdom (NCBI)`:`Species (NCBI)`),
+      by = "ASV_tip"
+    ) %>%
+      dplyr::mutate(`Final ID` = `blast ID`) %>%
+      dplyr::filter(Abundance > 0)
+    ```
+
+## 7. Contamination Analysis
+
+This section identifies potential contaminant ASVs by comparing their abundance in samples against their abundance in the negative controls (PCR, extraction, filtration).
+
+### Identify Contaminant ASVs
+
+-   **Create a contaminant reference.** Isolate all ASVs present in control samples to build a reference table of potential contaminants and their maximum relative abundance within those controls.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Define keywords for control sample types
+    control_types <- c(
+      "Extraction control", "Extraction Control", "Ext. control", "Ext. Control",
+      "Filt. Control", "PCR control", "PCR Control", "Filt. control",
+      "Filtration control", "Filtration Control", "Negative control",
+      "Negative Control", "Positive control", "Positive Control", "Control"
+    )
+
+    # Create a lookup table of ASVs found in any control sample
+    all_contam_asvs <- all_ps_tbl_final %>%
+      dplyr::filter(Type %in% control_types) %>%
+      dplyr::group_by(`ASV (Sequence)`, Unique_File_name) %>%
+      # Find the max abundance of each ASV in each specific control well
+      dplyrsummarise(`Max. ASV abd. in control` = max(`Relative abundance on sample`, na.rm = TRUE), .groups = "drop") %>%
+      # Join back to get the control Type (PCR, Extraction, etc.)
+      dplyr::left_join(
+    all_ps_tbl_final %>% dplyr::select(Unique_File_name, Type, `Final ID`),
+    by = "Unique_File_name"
+      ) %>%
+      dplyr::distinct()
+
+    # Check the results
+    # head(all_contam_asvs)
+    # unique(all_contam_asvs$Unique_File_name)
+    ```
+
+### Flag Potential Contaminants in Samples
+
+-   **Compare sample vs. control abundance.** For each ASV in a true sample, compare its abundance to its maximum observed abundance in the corresponding negative controls. ASVs that are not significantly more abundant in the sample than in the control are flagged as potential contaminants.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # This vectorized approach replaces the slow row-by-row 'for' loop.
+    # It works by reshaping the data to link each sample-ASV pair to its controls.
+
+    # 1. Prepare a long-format map of samples to their specific controls
+    sample_to_control_map <- all_ps_tbl_final %>%
+      dplyr::filter(!Type %in% control_types) %>%
+      dplyr::select(
+    Unique_File_name, `ASV (Sequence)`, `Relative abundance on sample`,
+    `PCR control`, `Extraction control`, `Filtration control`
+      ) %>%
+      tidyr::pivot_longer(
+    cols = c(`PCR control`, `Extraction control`, `Filtration control`),
+    names_to = "Control_Type_Source",
+    values_to = "Control_Name_Raw"
+      ) %>%
+      # Expand rows for semicolon-separated control names
+      tidyr::separate_longer_delim(Control_Name_Raw, delim = ";")
+
+    # 2. Create a clean lookup table for control abundances
+    control_abundance_lookup <- all_contam_asvs %>%
+      dplyr::select(
+    Control_Name_Raw = Unique_File_name,
+    `ASV (Sequence)`,
+    `Max. ASV abd. in control`
+      )
+
+    # 3. Join the sample map with the control abundances
+    contamination_check_tbl <- sample_to_control_map %>%
+      dplyr::left_join(control_abundance_lookup, by = c("Control_Name_Raw", "ASV (Sequence)")) %>%
+      # For each sample-ASV, find the highest contamination signal from any of its controls
+      dplyr::group_by(Unique_File_name, `ASV (Sequence)`) %>%
+      dplyr::summarise(
+    max_control_abd = max(`Max. ASV abd. in control`, na.rm = TRUE),
+    sample_abd = dplyr::first(`Relative abundance on sample`),
+    .groups = "drop"
+      ) %>%
+      # Calculate fold change (handle cases where control abundance is 0 or NA)
+      dplyr::mutate(
+    fold_change = gtools::foldchange(sample_abd, max_control_abd),
+    `Contamination status` = dplyr::if_else(
+      fold_change > 1, # Rule: Must be more abundant in sample than control
+      "True Detection",
+      "Possible Contamination"
+    )
+      )
+
+    # 4. Join contamination status back to the main table
+    all_ps_tbl_final <- all_ps_tbl_final %>%
+      dplyr::left_join(
+    contamination_check_tbl %>% dplyr::select(`ASV (Sequence)`, Unique_File_name, `Contamination status`),
+    by = c("ASV (Sequence)", "Unique_File_name")
+      ) %>%
+      # For controls themselves, status is irrelevant; for samples not in the check_tbl, they are True Detections
+      dplyr::mutate(
+    `Contamination status` = dplyr::coalesce(`Contamination status`, "True Detection")
+      )
+
+    # Check results
+    # table(all_ps_tbl_final$`Contamination status`)
+    ```
+
+## 8. Final Results Visualization
+
+This section generates plots to visualize the distribution of all identified ASVs, their taxonomic assignment, size, and relative abundance across samples.
+
+### Plot ASV Distributions by Project
+
+-   **Generate overview plots.** For each project, create a comprehensive plot showing every ASV, colored by BLAST score and shaped by superkingdom. This allows for a high-level assessment of the taxonomic landscape and data quality.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Define shapes for taxonomic groups
+    SHAPES <- c("Archaea" = 25, "Bacteria" = 24, "Eukaryota" = 21, "Viruses" = 23)
+
+    # Loop through each project to create and save plots
+    for (PRJ in all_projects) {
+
+      message(paste0("Plotting project: ", PRJ))
+
+      # Prepare data for plotting (calculate pseudo-score)
+      plot_data <- all_ps_tbl_final %>%
+    dplyr::filter(Project == PRJ) %>%
+    dplyr::mutate(
+      `BLASTn pseudo-score` = ((`1_indentity` * (`1_qcovhsp` / 10)) / 10),
+      # Nullify score for uncultured hits
+      `BLASTn pseudo-score` = dplyr::case_when(
+        stringr::str_detect(`1_subject header`, "ncult") ~ NA_real_,
+        TRUE ~ `BLASTn pseudo-score`
+      )
+    ) %>%
+    dplyr::arrange(dplyr::desc(`BLASTn pseudo-score`))
+
+      # Build the plot
+      asv_dist_plot <- ggplot2::ggplot(
+    plot_data,
+    aes(
+      y = interaction(Sample, Unique_File_name, sep = " - "),
+      x = `ASV Size (pb)`,
+      fill = `BLASTn pseudo-score`,
+      col = `BLASTn pseudo-score`,
+      shape = `Superkingdom (NCBI)`,
+      size = `Relative abundance on sample`,
+      alpha = 0.2,
+      text = paste0(
+        "Final ID: ", `Final ID`, "<br>",
+        "Sample: ", Sample, "<br>",
+        "ASV Size (bp): ", `ASV Size (bp)`, "<br>",
+        "Pseudo-score: ", round(`BLASTn pseudo-score`, 2)
+      )
+    )
+      ) +
+      ggplot2::geom_jitter(height = 0.4, width = 0.25) +
+      ggplot2::scale_fill_gradientn(
+    name = "BLASTn pseudo-score (%)", na.value = "grey95",
+    colours = blast_score_palette,
+    limits = c(60, 100), breaks = seq(60, 100, 5)
+      ) +
+      ggplot2::scale_color_gradientn(guide = "none", na.value = "grey80", colours = c("#330000", "darkred", "red", "yellow", "green", "darkgreen"), limits = c(60, 100)) +
+      ggplot2::scale_size_continuous(name = "Relative Abundance (%)") +
+      ggplot2::scale_shape_manual(name = "Superkingdom (NCBI)", values = SHAPES, na.value = 22) +
+      ggplot2::labs(x = "ASV Size (bp)", y = "Sample", title = paste("EcoMol -", PRJ)) +
+      ggplot2::theme_bw(base_size = 14) +
+      ggplot2::theme(legend.position = "bottom", legend.key.width = unit(2, 'cm')) +
+      ggplot2::facet_grid(rows = vars(`Read origin`, Primer), scales = "free_y", space = "free_y")
+
+      # Save static plot
+      n_samples_in_project <- length(unique(plot_data$Unique_File_name))
+      ggsave(
+    filename = file.path(results_path, paste0(PRJ, "-ASV_length_by_sample--All_ASVs.pdf")),
+    plot = asv_dist_plot,
+    device = "pdf",
+    width = 40,
+    height = round((n_samples_in_project * 0.5) + 5),
+    units = "cm",
+    limitsize = FALSE,
+    dpi = 300
+      )
+
+      # Save interactive plot
+      asv_dist_plotly <- plotly::ggplotly(asv_dist_plot, tooltip = "text")
+      htmlwidgets::saveWidget(
+    widget = asv_dist_plotly,
+    selfcontained = TRUE,
+    file = file.path(results_path, paste0(PRJ, "-ASV_length_by_sample--All_ASVs.html"))
+      )
+    }
+    ```
+
+## 9. Final Results Curation
+
+This section refines the identification confidence levels and categorizes organisms into functional groups (e.g., Metazoa) for downstream ecological analysis.
+
+### Assign Identification Confidence
+
+-   **Calculate confidence scores.** Compute a pseudo-score based on BLAST identity and coverage, and assign taxonomic ranks (Species, Genus, Family, etc.) based on standard percentage thresholds.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Calculate scores and assign taxonomic resolution
+    all_ps_tbl_final <- all_ps_tbl_final %>%
+      dplyr::mutate(
+    `Curated ID` = `Final ID`,
+    # Weighted score: heavily weights identity (10x) over coverage
+    `BLASTn pseudo-score` = ((10 * `1_indentity`) + `1_qcovhsp`) / 11,
+
+    # Assign resolution level based on score thresholds
+    Identification = dplyr::case_when(
+      `BLASTn pseudo-score` >= 98 ~ `Final ID`, 
+      `BLASTn pseudo-score` >= 95 ~ `Genus (NCBI)`, 
+      `BLASTn pseudo-score` >= 90 ~ `Family (NCBI)`, 
+      `BLASTn pseudo-score` >= 80 ~ `Order (NCBI)`, 
+      `BLASTn pseudo-score` >= 60 ~ `Class (NCBI)`,
+      TRUE ~ "Unidentified"
+    ),
+
+    `Identification Max. taxonomy` = dplyr::case_when(
+      `BLASTn pseudo-score` >= 98 ~ "Species",
+      `BLASTn pseudo-score` >= 95 ~ "Genus",
+      `BLASTn pseudo-score` >= 90 ~ "Family",
+      `BLASTn pseudo-score` >= 80 ~ "Order",
+      `BLASTn pseudo-score` >= 60 ~ "Class",
+      TRUE ~ "Unidentified"
+    )
+      )
+    ```
+
+### Mark Metazoan Taxa
+
+-   **Categorize Metazoans.** Flag ASVs belonging to Metazoa or other target groups (Zooplankton, Phytoplankton, Benthos) based on their taxonomy. This facilitates filtering for specific ecological guilds.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # 1. Define Biological Groups Lists (Expert Curation)
+    # Benthos
+    bentos_phy <- c("Annelida", "Arthropoda", "Mollusca")
+    bentos_cls <- c("Bivalvia", "Clitellata", "Gastropoda", "Insecta")
+
+    # Zooplankton
+    zplnk_phy <- c("Amoebozoa", "Arthropoda", "Cercozoa", "Ciliophora", "Rotifera")
+    zplnk_cls <- c("Branchiopoda", "Eurotatoria", "Filosia", "Hexanauplia", "Lobosa", "Oligohymenophorea")
+
+    # Periphyton
+    prftn_phy <- c("Bacillariophyta", "Charophyta", "Chlorophyta", "Cryptophyta", "Cyanobacteria", "Euglenophyta", "Rhodophyta")
+    prftn_cls <- c("Bacillariophyceae", "Chlorophyceae", "Chrysophyceae", "Coscinodiscophyceae", "Cryptophyceae", "Cyanophyceae", "Euglenophyceae", "Florideophyceae", "Mediophyceae", "Ulvophyceae", "Zygnematophyceae")
+
+    # Phytoplankton (Comprehensive list)
+    ftplnk_phy <- c(
+      "Bacillariophyta", "Charophyta", "Chlorophyta", "Cryptophyta", "Cyanobacteria", "Dinophyta", "Euglenophyta", "Ochrophyta",
+      "Apicomplexa", "Cercozoa", "Ciliophora", "Discosea", "Endomyxa", "Euglenozoa", "Evosea", "Foraminifera", "Fornicata",
+      "Haptophyta", "Hemimastigophora", "Heterolobosea", "Nebulidia", "Nibbleridia", "Oomycota", "Parabasalia", "Perkinsozoa",
+      "Preaxostyla", "Rhodophyta", "Tubulinea"
+    )
+    ftplnk_cls <- c(
+      "Bacillariophyceae", "Chlorophyceae", "Chrysophyceae", "Coscinodiscophyceae", "Cryptophyceae", "Cyanophyceae",
+      "Dinophyceae", "Euglenophyceae", "Mediophyceae", "Trebouxiophyceae", "Ulvophyceae", "Zygnematophyceae",
+      "Actinophryidae", "Aphelidea", "Bigyra", "Bolidophyceae", "Breviatea", "Centroplasthelida", "Choanoflagellata",
+      "Developea", "Dictyochophyceae", "Eustigmatophyceae", "Filasterea", "Glaucocystophyceae", "Hyphochytriomycetes",
+      "Ichthyosporea", "Olisthodiscophyceae", "Pelagophyceae", "Phaeophyceae", "Phaeothamniophyceae", "Raphidophyceae",
+      "Synurophyceae", "Xanthophyceae"
+    )
+
+    # Combine all target classes and phyla for quick lookup
+    all_target_phy <- unique(c(bentos_phy, zplnk_phy, prftn_phy, ftplnk_phy))
+    all_target_cls <- unique(c(bentos_cls, zplnk_cls, prftn_cls, ftplnk_cls))
+
+    # 2. Apply Logic to Mark Metazoa/Targets
+    all_ps_tbl_final <- all_ps_tbl_final %>%
+      dplyr::mutate(
+    `Possible Metazoa` = dplyr::case_when(
+      # Exclusions (Hard filters)
+      stringr::str_detect(`blast ID`, "Chordate environmental") ~ FALSE,
+      stringr::str_detect(`blast ID`, "Match_not_reliable") ~ FALSE,
+      stringr::str_detect(`Superkingdom (NCBI)`, "Bacteria|Archaea|Viruses") ~ FALSE, # Note: Viruses added
+      is.na(`Kingdom (NCBI)`) ~ FALSE,
+      
+      # Inclusions (Target Groups)
+      stringr::str_detect(`Superkingdom (NCBI)`, "Eukaryota") & (`Phylum (NCBI)` %in% all_target_phy) ~ TRUE,
+      stringr::str_detect(`Superkingdom (NCBI)`, "Eukaryota") & (`Class (NCBI)` %in% all_target_cls) ~ TRUE,
+      
+      # General Metazoa/Viridiplantae catch-all (if not excluded above)
+      stringr::str_detect(`Kingdom (NCBI)`, "Metazoa|Viridiplantae") ~ TRUE,
+      
+      # Default
+      TRUE ~ FALSE
+    )
+      )
+
+    # Check distribution
+    # table(all_ps_tbl_final$`Possible Metazoa`, useNA = "always")
+    ```
+
+### Final Table Formatting
+
+-   **Reorganize columns.** Select and rename columns to produce a clean, user-friendly output table for reporting.
+
+    ```{r, echo=TRUE, eval=FALSE}
+    # Create final clean table
+    results_table_clean <- all_ps_tbl_final %>%
+      # Rename control columns for clarity
+      dplyr::rename(
+    `PCR Control` = `PCR control`,
+    `Ext. Control` = `Extraction control`,
+    `Filt. Control` = `Filtration control`
+      ) %>%
+      # Select and order essential columns
+      dplyr::select(
+    Researcher, Project, Primer, Sample, Unique_File_name,
+    `Read origin`, `Relative abundance on sample`, Abundance,
+    `BLASTn pseudo-score`, Identification, `Curated ID`, `Possible Metazoa`,
+    `Superkingdom (NCBI)`, `Phylum (NCBI)`, `Class (NCBI)`, `Order (NCBI)`, 
+    `Family (NCBI)`, `Genus (NCBI)`, `Species (NCBI)`,
+    `ASV (Sequence)`, `ASV Size (pb)`,
+    `Contamination status`,
+    starts_with("Metadata")
+      )
+
+    # Save final results
+    writexl::write_xlsx(
+      results_table_clean,
+      path = file.path(results_path, paste0("Final_ASV_Table_", Sys.Date(), ".xlsx"))
+    )
+    ```
