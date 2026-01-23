@@ -69,6 +69,13 @@ editor_options:
 
 ### Housekeeping
 
+- **Set Cutadapt paht**
+
+```{r}
+# Path to cutadapt executable
+cutadapt <- "/usr/local/bin/cutadapt"
+```
+
 -   **Define custom functions.**
 
     ```{r}
@@ -812,7 +819,7 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
 -   **Configure output paths.** Map sample names to new Cutadapt output filenames, ensuring separation by primer set if necessary.
 
     ```{r}
-    # Map sample names to cutadapt output files ----
+    # Map sample names to cutadapt output files (identify paired samples for Cutadapt input)
     paired_files_per_primer <- sample_idx_tbl %>% 
       dplyr::filter(Stage %in% c("FWD_R1_paired", "FWD_R2_paired")) %>% 
       dplyr::filter(file.exists(`Read file`))
@@ -828,8 +835,8 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
         )
       )
 
-    # Separate paths by primer if multiple primers exist per sample (optional, based on     logic)
-    cut_files_per_primer <- cut_files_per_primer %>% 
+    # OPTIONAL Separate paths by primer if multiple primers exist per sample 
+    cut_files_per_primer_ <- cut_files_per_primer %>% 
       tidyr::separate_longer_delim(cols = "Primer", delim = ";") %>% 
       dplyr::mutate(`Read file` = dplyr::case_when(
         Stage %in% c("FWD_R1_cutadapt", "FWD_R2_cutadapt") ~ stringr::str_replace_all(
@@ -841,7 +848,8 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
       ))
 
     # Combine input (paired) and output (cutadapt) metadata
-    cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     paired_files_per_primer)
+    cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     
+                                             paired_files_per_primer)
     ```
 
 -   **Execute Cutadapt.** Iterate through each primer set, generate the appropriate clipping flags (including reverse complements for read-through), and execute the Cutadapt system command for paired-end reads.
@@ -859,24 +867,24 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
       
       # Forward primer (for R1 5')
       fwd_seq <- primers_all_orients$Sequence[
-        grep(paste0(PRIMER_SET, "__FWD_Forward"), primers_all_orients$`Orientation name`)
-      ]
-      
-      # Reverse complement of Reverse primer (for R1 3' read-through)
-      rev_rc_seq <- primers_all_orients$Sequence[
-        grep(paste0(PRIMER_SET, "__REV_RevComp"), primers_all_orients$`Orientation name`)
-      ]
-      
-      # Reverse primer (for R2 5')
-      rev_seq <- primers_all_orients$Sequence[
-        grep(paste0(PRIMER_SET, "__REV_Forward"), primers_all_orients$`Orientation name`)
+        grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_FWD_Forward"), primers_all_orients$`Orientation name`)
       ]
       
       # Reverse complement of Forward primer (for R2 3' read-through)
       fwd_rc_seq <- primers_all_orients$Sequence[
-        grep(paste0(PRIMER_SET, "__FWD_RevComp"), primers_all_orients$`Orientation name`)
+        grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_FWD_RevComp"), primers_all_orients$`Orientation name`)
       ]
-
+      
+      # Reverse primer (for R2 5')
+      rev_seq <- primers_all_orients$Sequence[
+        grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_REV_Forward"), primers_all_orients$`Orientation name`)
+      ]
+      
+      # Reverse complement of Reverse primer (for R1 3' read-through)
+      rev_rc_seq <- primers_all_orients$Sequence[
+        grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_REV_RevComp"), primers_all_orients$`Orientation name`)
+      ]
+      
       # 2. Construct Cutadapt Flags ----
       # -g: Anchor FWD to start of R1; -a: Remove REV_RC from end of R1
       R1_flags <- paste0("-g ", fwd_seq, " -a ", rev_rc_seq)
@@ -887,7 +895,7 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
       # 3. Prepare File Lists ----
       # Filter samples belonging to this primer set and pivot to wide format
       PRIMER_SET_files <- cut_files_per_primer %>%
-        dplyr::filter(stringr::str_detect(Primer, PRIMER_SET)) %>%
+        dplyr::filter(stringr::str_detect(Primer, str_extract(PRIMER_SET, "^[^_]+"))) %>%
         tidyr::pivot_wider(
           id_cols = c("Unique_File_name", "Unique_File_name_Primer"),
           names_from = "Stage",
@@ -916,8 +924,8 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
               R1_flags,
               R2_flags,
               "-e 0.1",       # Max error rate 10%
-              "-j 0",         # Auto-detect cores (use 0 for max available, or set     specific number)
-              "-n 2",         # Remove up to 2 adapters per read (5' and 3')
+              "-j 70",         # Auto-detect cores (use 0 for max available, or set     specific number)
+              "-n", 5,         # Remove up to 2 adapters per read (5' and 3')
               "-o", fnFs_out[i],
               "-p", fnRs_out[i],
               fnFs_in[i],
