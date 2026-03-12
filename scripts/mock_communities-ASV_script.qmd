@@ -69,12 +69,12 @@ editor_options:
 
 ### Housekeeping
 
--   **Set Cutadapt paht**
+-   **Set Cutadapt path**
 
-```{r}
-# Path to cutadapt executable
-cutadapt <- "/usr/local/bin/cutadapt"
-```
+    ```{r}
+    # Path to cutadapt executable
+    cutadapt <- "/usr/local/bin/cutadapt"
+    ```
 
 -   **Define custom functions.**
 
@@ -643,7 +643,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
                            size = 1) +
         # Color scales
         ggplot2::scale_fill_gradientn(name = "Proportion of reads\n     with primer (%)",
-                                      colours = c("white", "red", "yellow", "green", "dark green"),
+                                      colours = c("white", "red", "yellow", 
+                                                  "green", "dark green"),
                                       values = c(0, 1),
                                       na.value = "white") +
         # Axes and Guides
@@ -652,7 +653,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
           breaks = c(10, 100, 1000, 10000, 100000),
           expand = expansion(mult = c(0, 0.2))) +
         ggplot2::scale_alpha(guide = 'none') +
-        ggplot2::guides(color = guide_legend(override.aes = list(fill = "white", size = 10))) +
+        ggplot2::guides(color = guide_legend(override.aes = list(fill = "white", 
+                                                                 size = 10))) +
         
         # Theme adjustments
         ggplot2::theme_light(base_line_size = 0.025, base_size = 6) +
@@ -664,7 +666,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
                        legend.title = element_text(size = 7)) +
         
         # Dynamic horizontal lines based on actual sample count
-        ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2), color = "darkgrey") +
+        ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2), 
+                            color = "darkgrey") +
         
         # Titles and Facets
         ggplot2::labs(title = PRJ,
@@ -677,7 +680,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
                             space = "free")
 
       # 4. Save the plot
-      ggplot2::ggsave(file = paste0(results_path, "/", PRJ, "-primers_found_in_reads_1e.pdf"),
+      ggplot2::ggsave(file = paste0(results_path, "/", PRJ, 
+                                    "-primers_found_in_reads_1e.pdf"),
                       plot = primers_tile,
                       device = "pdf",
                       width = 10 + (n_primers * 10),
@@ -685,27 +689,23 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
                       units = "cm",
                       limitsize = FALSE,
                       dpi = 600)
-    }
-
-
+      }
     ```
 
 -   **Embed PDF results.** Dynamically list and display the generated PDF plots within the HTML report.
 
     ```{r}
     # Extract the PDF path from the R object
-    pdf_info <- list.files(
-      path = results_path, # Using the variable results_path for consistency
-      pattern = "primers_found_in_reads",
-      full.names = TRUE
-    )
+    pdf_info <- list.files(path = results_path,
+                           pattern = "primers_found_in_reads",
+                           full.names = TRUE)
 
     # Generate the iframe HTML code
     if(length(pdf_info) > 0) {
       cat(paste0('<iframe src="', pdf_info, '" width="1200" height="800"></iframe>'))
-    } else {
-      cat("No primer plots found.")
-    }
+      } else {
+        cat("No primer plots found.")
+        }
     ```
 
 -   **Check orientations.** Analyze the generated plots to confirm that primers appear in the expected read files and orientations. The correct interpretation depends on two factors: **how the sequencing library was constructed** (standard vs. mixed orientation) and **whether read-through occurs** (i.e., whether the amplicon is shorter than the read length).
@@ -724,7 +724,7 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
     **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:\[\^1\]
 
     | Primer  | R1                                       | R2                                       |
-    |:-----------------------|:-----------------------|:-----------------------|
+    |:--------------|:----------------------------|:----------------------------|
     | **FWD** | **Forward** (good, 5' start of R1)       | **RevComp** (read-through, 3' end of R2) |
     | **REV** | **RevComp** (read-through, 3' end of R1) | **Forward** (good, 5' start of R2)       |
 
@@ -748,7 +748,7 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
     **Troubleshooting: diagnosing orientation anomalies.**
 
     | Pattern observed in the plot                                                                 | Likely cause                                                                                                | Recommended fix                                                                                                                                               |
-    |:-----------------------|:-----------------------|:-----------------------|
+    |:------------------|:---------------------|:------------------------------|
     | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                             |
     | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                       |
     | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                       |
@@ -761,112 +761,90 @@ This section executes the DADA2 core workflow to infer Amplicon Sequence Variant
 
 ### Filter and Trim Reads
 
+DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the Cutadapt step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (maxN = c(0, 0)). Comprehensive quality filtering, error tracking (such as maxEE), and length truncation are purposefully deferred until after primer removal.
+
 -   **Prepare file paths.** Identify paired-end read files that contain primers and organize their paths for the filtering step.
 
     ```{r}
     # Select files with identified primers and reshape to wide format for processing
-    primer_paired_files <- sample_idx_tbl %>% 
-      dplyr::filter(stringr::str_detect(
-        string = Stage,
-        pattern = "FWD_R1|FWD_R2|FWD_R1_paired|FWD_R2_paired"
-      )) %>% 
-      tidyr::pivot_wider(
-        id_cols = c("Unique_File_name", "Primer", "Lib"),
-        names_from = "Stage",
-        values_from = "Read file"
-      )
+    primer_paired_files <- sample_idx_tbl %>%
+      dplyr::filter(stringr::str_detect(string = Stage,
+                                        pattern =
+                                          "FWD_R1|FWD_R2|FWD_R1_paired|FWD_R2_paired"
+                                        )) %>% 
+      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Primer", "Lib"),
+                         names_from = "Stage",
+                         values_from = "Read file")
 
     # Verify basenames (optional check)
     # primer_paired_files$FWD_R1 %>% BiocGenerics::basename()
     # primer_paired_files$FWD_R1_paired %>% basename()
     ```
 
--   **Define filtering function.** Create a wrapper function for dada2::filterAndTrim to handle forward and reverse reads, applying quality thresholds and removing PhiX.
+-   **Define filtering function.** Create a wrapper function for filterAndTrim to handle forward and reverse reads, applying quality thresholds and removing PhiX.
 
     ```{r}
     # Custom function to repair and filter reads using DADA2
-    repairNfilt_with_DADA2 <- function(Unique_File_name,
-                                       FWD_R1_in,
-                                       FWD_R2_in,
-                                       FWD_R1_out,
-                                       FWD_R2_out) {
-      
+    pre_filter_Ns <- function(Unique_File_name,
+                              FWD_R1_in,
+                              FWD_R2_in,
+                              FWD_R1_out,
+                              FWD_R2_out) {
       # Check if input files exist
       if (file.exists(FWD_R1_in) && file.exists(FWD_R2_in)) {
         
-        # Run filterAndTrim
-        # Note: maxN=0 is strict but standard for DADA2; maxEE=20 is very loose,
-        # typical for raw data prep before denoising, but check if maxEE=2 or 5 is better    for your data.
-        sample_filtered_out <- dada2::filterAndTrim(
-          fwd = FWD_R1_in,
-          filt = FWD_R1_out,
-          rev = FWD_R2_in,
-          filt.rev = FWD_R2_out,
-          maxN = c(0, 0),
-          maxEE = c(20, 20),
-          multithread = TRUE, # Internal multithreading of the function
-          matchIDs = TRUE,
-          rm.phix = TRUE,
-          compress = TRUE,
-          minLen = 30,
-          verbose = FALSE
-        )
+        # Run filterAndTrim with ONLY maxN = 0 to prepare for Cutadapt
+        sample_filtered_out <- dada2::filterAndTrim(fwd = FWD_R1_in,
+                                                    filt = FWD_R1_out,
+                                                    rev = FWD_R2_in,
+                                                    filt.rev = FWD_R2_out,
+                                                    maxN = c(0, 0),
+                                                    multithread = TRUE,
+                                                    compress = TRUE,
+                                                    verbose = TRUE)
         
         # Format output
         tibble::as_tibble(sample_filtered_out) %>%
           dplyr::mutate(Unique_File_name = Unique_File_name)
-          
-      } else {
-        warning(paste("Missing files for:", Unique_File_name))
-        return(tibble::tibble())
+        
+        } else {
+          warning(paste("Missing files for:", Unique_File_name))
+          return(tibble::tibble())
+        }
       }
-    }
     ```
 
 -   **Execute filtering.** Run the filtering function in parallel across all samples and generate a summary table of read retention.
 
     ```{r}
     # Setup parallel processing
-    # Using available cores minus 2 to avoid system freeze
     cores_to_be_used <- future::availableCores() - 2 
     future::plan(future::multisession(workers = cores_to_be_used))
 
     # Run filtering in parallel
     tictoc::tic()
 
-    # Note: We use furrr::future_pmap or similar if we wanted fully tidy parallel,
-    # but passing vectors to a function as done originally works if the function is     vectorized
-    # or if we map over it.
-    # The original code passed vectors directly to 'repairNfilt_with_DADA2'. 
-    # However, 'filterAndTrim' is vectorized for file paths.
-    # Since the custom function processes one set of 4 paths at a time, we must map over     it.
-
     all_filtered_out_fun <- furrr::future_pmap_dfr(
-      list(
-        primer_paired_files$Unique_File_name,
-        primer_paired_files$FWD_R1,
-        primer_paired_files$FWD_R2,
-        primer_paired_files$FWD_R1_paired,
-        primer_paired_files$FWD_R2_paired
-      ),
-      .f = repairNfilt_with_DADA2,
-      .options = furrr::furrr_options(seed = TRUE)
-    )
+      list(primer_paired_files$Unique_File_name,
+           primer_paired_files$FWD_R1,
+           primer_paired_files$FWD_R2,
+           primer_paired_files$FWD_R1_paired,
+           primer_paired_files$FWD_R2_paired),
+      .f = pre_filter_Ns,
+      .options = furrr::furrr_options(seed = TRUE))
 
     tictoc::toc()
 
     # Generate summary table
-    all_filtered_out <- all_filtered_out_fun %>% 
-      dplyr::mutate(
-        Proportion = round((reads.out / reads.in * 100), digits = 2)
-      ) %>% 
-      dplyr::rename(
-        "Raw reads (pairs)" = "reads.in",
-        "Paired reads"      = "reads.out"
-      )
+    pre_filtered_summary <- all_filtered_out_fun %>% 
+      dplyr::mutate(Proportion = round((reads.out / reads.in * 100), 
+                                       digits = 2)) %>% 
+      dplyr::rename("Raw reads (pairs)" = "reads.in",
+                    "Paired reads"      = "reads.out")
 
     # View result
-    all_filtered_out
+    # all_filtered_out
+    pre_filtered_summary
     ```
 
 ### Remove Primers with Cutadapt
@@ -878,31 +856,30 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
     ```{r}
     # Map sample names to cutadapt output files (identify paired samples for Cutadapt input)
     paired_files_per_primer <- sample_idx_tbl %>% 
-      dplyr::filter(Stage %in% c("FWD_R1_paired", "FWD_R2_paired")) %>% 
+      dplyr::filter(Stage %in% c("FWD_R1_paired", 
+                                 "FWD_R2_paired")) %>% 
       dplyr::filter(file.exists(`Read file`))
 
     # Generate output paths by replacing 'paired' with 'cutadapt'
     cut_files_per_primer <- paired_files_per_primer %>%  
-      dplyr::mutate(
-        Stage = gsub(Stage, pattern = "_paired", replacement = "_cutadapt"),
-        `Read file` = stringr::str_replace_all(
-          string = `Read file`,
-          pattern = "paired", 
-          replacement = "cutadapt"
-        )
-      )
+      dplyr::mutate(Stage = gsub(Stage, pattern = "_paired", 
+                                 replacement = "_cutadapt"),
+                    `Read file` = stringr::str_replace_all(string = `Read file`,
+                                                           pattern = "paired",
+                                                           replacement = "cutadapt"))
 
     # OPTIONAL Separate paths by primer if multiple primers exist per sample 
     cut_files_per_primer_ <- cut_files_per_primer %>% 
-      tidyr::separate_longer_delim(cols = "Primer", delim = ";") %>% 
+      tidyr::separate_longer_delim(cols = "Primer", 
+                                   delim = ";") %>% 
       dplyr::mutate(`Read file` = dplyr::case_when(
-        Stage %in% c("FWD_R1_cutadapt", "FWD_R2_cutadapt") ~ stringr::str_replace_all(
-          string = `Read file`,
-          pattern = paste0(cutadapt_libs, "/"),
-          replacement = paste0(cutadapt_libs, "/", Primer, "--")
-        ),
-        TRUE ~ `Read file`
-      ))
+        Stage %in% c("FWD_R1_cutadapt", 
+                     "FWD_R2_cutadapt") ~ 
+          stringr::str_replace_all(string = `Read file`,
+                                   pattern = paste0(cutadapt_libs, "/"),
+                                   replacement = paste0(cutadapt_libs, "/", 
+                                                        Primer, "--")),
+        TRUE ~ `Read file`))
 
     # Combine input (paired) and output (cutadapt) metadata
     cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     
@@ -1006,51 +983,41 @@ The cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
 
     ```{r}
     # Map Cutadapt output to 'repaired' file paths ----
-    repair_files_per_primer <- cut_files_per_primer %>% 
+    repair_files_per_primer <- cut_files_per_primer %>%
       dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>% 
       dplyr::filter(file.exists(`Read file`)) %>% 
-      tidyr::pivot_wider(
-    id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
-    names_from = "Stage",
-    values_from = "Read file"
-      ) %>% 
-      dplyr::mutate(
-    FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
-    FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")
-      ) %>% 
-      tidyr::unite(
-    col = "Unique_File_name_Primer", 
-    sep = "--", 
-    remove = FALSE,
-    Unique_File_name, Primer
-      )
+      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
+                         names_from = "Stage",
+                         values_from = "Read file") %>% 
+      dplyr::mutate(FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
+                    FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")) %>% 
+      tidyr::unite(col = "Unique_File_name_Primer",
+                   sep = "--",
+                   remove = FALSE,
+                   Unique_File_name, Primer)
 
     # Execute repair in parallel ----
     # Uses the same filtering function but essentially just resynchronizes pairs
     tictoc::tic()
 
-    all_filtered_out_fun_repaired2 <- furrr::future_pmap_dfr(
-      list(
-    repair_files_per_primer$Unique_File_name_Primer,
-    repair_files_per_primer$FWD_R1_cutadapt,
-    repair_files_per_primer$FWD_R2_cutadapt,
-    repair_files_per_primer$FWD_R1_repaired,
-    repair_files_per_primer$FWD_R2_repaired
-      ),
-      .f = repairNfilt_with_DADA2, # Reusing the wrapper function
-      .options = furrr::furrr_options(seed = TRUE)
-    )
-
+    all_filtered_out_fun_repaired2 <- 
+      furrr::future_pmap_dfr(list(repair_files_per_primer$Unique_File_name_Primer,
+                                  repair_files_per_primer$FWD_R1_cutadapt,
+                                  repair_files_per_primer$FWD_R2_cutadapt,
+                                  repair_files_per_primer$FWD_R1_repaired,
+                                  repair_files_per_primer$FWD_R2_repaired),
+                             .f = repairNfilt_with_DADA2, # Reusing the wrapper function
+                             .options = furrr::furrr_options(seed = TRUE))
     tictoc::toc()
 
     # Summarize repair results ----
     all_repaired <- all_filtered_out_fun_repaired2 %>% 
-      dplyr::rename(
-    "Unique_File_name_Primer" = "Unique_File_name",
-    "Primer detected reads"   = "reads.in",
-    "Repaired reads"          = "reads.out"
-      ) %>% 
-      dplyr::mutate(Proportion = round((`Repaired reads` / `Primer detected reads` * 100), digits = 2)) %>% 
+      dplyr::rename("Unique_File_name_Primer" = "Unique_File_name",
+                    "Primer detected reads"   = "reads.in",
+                    "Repaired reads"          = "reads.out") %>% 
+      dplyr::mutate(Proportion = round((`Repaired reads` / 
+                                          `Primer detected reads` * 100), 
+                                       digits = 2)) %>% 
       BiocGenerics::unique()
 
     all_repaired
