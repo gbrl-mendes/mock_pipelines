@@ -757,9 +757,17 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
 ## 3. DADA2 ASV Workflow
 
-This section executes the DADA2 core workflow to infer Amplicon Sequence Variants (ASVs) from the pre-processed reads. The process begins with strict quality filtering and the physical removal of primers using Cutadapt. Next, a run-specific error model is learned, which underpins the denoising algorithm designed to distinguish true biological variants from sequencing errors. The pipeline concludes by merging paired reads, constructing the sequence table, and removing chimeras, resulting in a high-resolution ASV table analogous to a traditional OTU table.
+This section executes the DADA2 core workflow to infer Amplicon Sequence Variants (ASVs) from the pre-processed reads. The workflow is organized into two phases:
 
-### Pre-filtering reads
+1.  **Read preparation**: ambiguous bases are removed, primers are physically excised with Cutadapt, their removal is verified, and a final quality filter is applied.
+
+2.  **DADA2 inference steps**: a run-specific error model is learned, reads are denoised and merged, and chimeric sequences are removed, resulting in a high-resolution ASV table analogous to a traditional OTU table.
+
+### Read Preparation and Primer Removal
+
+Before DADA2 can learn error rates and infer ASVs, reads must be free of ambiguous bases, primer sequences, and low-quality bases. This preparation is carried out in four sequential steps: a pre-filter to remove reads containing Ns, primer removal with Cutadapt, a sanity check confirming successful trimming, and a final quality filter applied to primer-free reads.
+
+#### Pre-filtering reads
 
 DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the Cutadapt step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (**`maxN = 0`**). Comprehensive quality filtering, error tracking (such as **`maxEE`**), and length truncation are purposefully deferred until after primer removal.
 
@@ -834,7 +842,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
                                .f = pre_filter_Ns,
                                .options = furrr::furrr_options(seed = TRUE))
       tictoc::toc()
-    }
+      }
 
     # Generate summary table
     pre_filtered_summary <- all_filtered_out_fun %>%
@@ -847,7 +855,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
     pre_filtered_summary
     ```
 
-### Remove Primers with Cutadapt
+#### Remove Primers with Cutadapt
 
 The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequences from reads, also capable of handling read-through scenarios.
 
@@ -943,10 +951,12 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
           seqs <- cutadapt_flags[[PRIMER_SET]]
           
           # -g: Anchor FWD to start of R1; -a: Remove REV_RC from end of R1
-          R1_flags <- paste0("-g ", seqs$fwd_seq, " -a ", seqs$rev_rc_seq)
+          R1_flags <- paste0("-g", seqs$fwd_seq, 
+                             "-a", seqs$rev_rc_seq)
           
           # -G: Anchor REV to start of R2; -A: Remove FWD_RC from end of R2
-          R2_flags <- paste0("-G ", seqs$rev_seq, " -A ", seqs$fwd_rc_seq)
+          R2_flags <- paste0("-G", seqs$rev_seq, 
+                             "-A", seqs$fwd_rc_seq)
           
           # Store back for use in the execution step
           cutadapt_flags[[PRIMER_SET]]$R1_flags <- R1_flags
@@ -998,36 +1008,36 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
     -   **`--pair-filter`**: Determines when a pair is discarded. **`any`** (default) removes the pair if either read fails; both removes it only if both fail. When combined with **`--discard-untrimmed`**, always prefer any to avoid retaining pairs where only one read carries the expected primer.
 
     ```{r}
-        for (PRIMER_SET in primer_sets) {
-          
-          flags <- cutadapt_flags[[PRIMER_SET]]
-          fnFs_in <- flags$fnFs_in
-          fnRs_in <- flags$fnRs_in
-          fnFs_out <- flags$fnFs_out
-          fnRs_out <- flags$fnRs_out
-          
-          if (length(fnFs_in) > 0) {
-            for (i in seq_along(fnFs_in)) {
-              system2(command = cutadapt, 
-                      args = c(flags$R1_flags, flags$R2_flags,
-                           "-e = 0.1",
-                           "-j = 70",
-                           "-n", 5,
-                           "--minimum-length = 30",
-                            "--discard-untrimmed",
-                           "--match-read-wildcards",
-                           # "--pair-filter = both",
-                           "-o", fnFs_out[i],
-                           "-p", fnRs_out[i], fnFs_in[i], fnRs_in[i]
-                      ))
-              }
-            } else {
-              message(paste("No valid input files found for primer set:", PRIMER_SET))
-            }
+    for (PRIMER_SET in primer_sets) {
+      
+      flags <- cutadapt_flags[[PRIMER_SET]]
+      fnFs_in <- flags$fnFs_in
+      fnRs_in <- flags$fnRs_in
+      fnFs_out <- flags$fnFs_out
+      fnRs_out <- flags$fnRs_out
+      
+      if (length(fnFs_in) > 0) {
+        for (i in seq_along(fnFs_in)) {
+          system2(command = cutadapt, 
+                  args = c(flags$R1_flags, flags$R2_flags,
+                       "-e = 0.1",
+                       "-j = 70",
+                       "-n", 5,
+                       "--minimum-length = 30",
+                        "--discard-untrimmed",
+                       "--match-read-wildcards",
+                       # "--pair-filter = both",
+                       "-o", fnFs_out[i],
+                       "-p", fnRs_out[i], fnFs_in[i], fnRs_in[i]
+                  ))
           }
+        } else {
+          message(paste("No valid input files found for primer set:", PRIMER_SET))
+        }
+      }
     ```
 
-### Primer Removal Verification
+#### Primer Removal Verification
 
 After running Cutadapt, it is important to confirm that primer sequences were effectively removed from all reads before proceeding to quality filtering and ASV inference. All counts are expected to be zero or near-zero; any sample showing consistent primer hits after trimming should be investigated for unexpected primer orientations, chimeric primers, or incorrect flag configuration in the Cutadapt step.
 
@@ -1193,51 +1203,157 @@ After running Cutadapt, it is important to confirm that primer sequences were ef
         }
     ```
 
-### Repair Paired Reads
+#### Filter and Trim
+
+With primers removed by Cutadapt, reads now reflect only the biological sequence of the target amplicon and are ready for quality-based filtering. Unlike the pre-filtering step — which targeted only ambiguous bases — `filterAndTrim` is now applied with parameters that directly evaluate read quality, length, and integrity before ASV inference.
+
+-   Prepare file paths. Map Cutadapt output files to new filtered output paths.
+
+    ```{r}
+    # Map Cutadapt output to filtered file paths
+    filter_files_per_primer <- cut_files_per_primer %>%
+      dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>%
+      dplyr::filter(file.exists(`Read file`)) %>%
+      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer",
+                                 "Primer", "Run"),
+                     names_from  = "Stage",
+                     values_from = "Read file") %>%
+      dplyr::mutate(
+    FWD_R1_filtered = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "filtered"),
+    FWD_R2_filtered = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "filtered")
+      ) %>%
+      tidyr::unite(col    = "Unique_File_name_Primer",
+               sep    = "--",
+               remove = FALSE,
+               Unique_File_name, Primer)
+    ```
+
+-   Define filtering function. Create a wrapper for `filterAndTrim` applying quality thresholds.
+
+    The key parameters to adjust for your dataset are:
+
+    -   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
+
+    -   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
+
+    -   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
+
+    -   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your Cutadapt output files to decide.
+
+    -   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
+
+    ```{r}
+    quality_filter <- function(Unique_File_name_Primer,
+                               FWD_R1_in,
+                               FWD_R2_in,
+                               FWD_R1_out,
+                               FWD_R2_out) {
+      
+      if (file.exists(FWD_R1_in) && file.exists(FWD_R2_in)) {
+        
+        sample_filtered_out <- dada2::filterAndTrim(fwd = FWD_R1_in,
+                                                    filt = FWD_R1_out,
+                                                    rev = FWD_R2_in,
+                                                    filt.rev = FWD_R2_out,
+                                                    maxN = 0,
+      # Vector of length 2: first value applies to R1, second to R2.
+                                                    maxEE = c(2, 2),
+                                                    truncQ = 2,
+                                                    minLen = 100,
+                                                    rm.phix = TRUE,
+                                                    # truncLen = c(0, 0),
+                                                    multithread = TRUE,
+                                                    compress    = TRUE,
+                                                    verbose     = FALSE)
+        
+        tibble::as_tibble(sample_filtered_out) %>%
+          
+          dplyr::mutate(Unique_File_name_Primer = Unique_File_name_Primer)
+        } else {
+          
+          warning(paste("Missing files for:", Unique_File_name_Primer))
+          
+          return(tibble::tibble())
+        }
+      }
+    ```
+
+-   **Execute filtering.** Run the filtering function in parallel across all samples and generate a summary table of read retention.
+
+    ```{r}
+    # Setup parallel processing
+    cores_to_be_used <- future::availableCores() - 2
+    future::plan(future::multisession(workers = cores_to_be_used))
+
+    {
+      tictoc::tic()
+      
+      all_filtered_out_fun <- furrr::future_pmap_dfr(
+    list(filter_files_per_primer$Unique_File_name_Primer,
+         filter_files_per_primer$FWD_R1_cutadapt,
+         filter_files_per_primer$FWD_R2_cutadapt,
+         filter_files_per_primer$FWD_R1_filtered,
+         filter_files_per_primer$FWD_R2_filtered),
+    .f       = quality_filter,
+    .options = furrr::furrr_options(seed = TRUE))
+      
+      tictoc::toc()
+    }
+
+    # Generate summary table
+    all_filtered_summary <- all_filtered_out_fun %>%
+      dplyr::mutate(Proportion = round((reads.out / reads.in * 100), digits = 2)) %>%
+      dplyr::rename("Primer-trimmed reads (pairs)" = "reads.in",
+                "Filtered reads (pairs)"       = "reads.out")
+
+    all_filtered_summary
+
+    ```
 
 -   **Sync paired-end files.** Ensure R1 and R2 files remain synchronized after Cutadapt processing, discarding orphans.
 
-    ```{r}
-    # Map Cutadapt output to 'repaired' file paths ----
-    repair_files_per_primer <- cut_files_per_primer %>%
-      dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>% 
-      dplyr::filter(file.exists(`Read file`)) %>% 
-      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
-                         names_from = "Stage",
-                         values_from = "Read file") %>% 
-      dplyr::mutate(FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
-                    FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")) %>% 
-      tidyr::unite(col = "Unique_File_name_Primer",
-                   sep = "--",
-                   remove = FALSE,
-                   Unique_File_name, Primer)
+```{{r}}
 
-    # Execute repair in parallel ----
-    # Uses the same filtering function but essentially just resynchronizes pairs
-    tictoc::tic()
+# Map Cutadapt output to 'repaired' file paths ----
+repair_files_per_primer <- cut_files_per_primer %>%
+  dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>% 
+  dplyr::filter(file.exists(`Read file`)) %>% 
+  tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
+                     names_from = "Stage",
+                     values_from = "Read file") %>% 
+  dplyr::mutate(FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
+                FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")) %>% 
+  tidyr::unite(col = "Unique_File_name_Primer",
+               sep = "--",
+               remove = FALSE,
+               Unique_File_name, Primer)
 
-    all_filtered_out_fun_repaired2 <- 
-      furrr::future_pmap_dfr(list(repair_files_per_primer$Unique_File_name_Primer,
-                                  repair_files_per_primer$FWD_R1_cutadapt,
-                                  repair_files_per_primer$FWD_R2_cutadapt,
-                                  repair_files_per_primer$FWD_R1_repaired,
-                                  repair_files_per_primer$FWD_R2_repaired),
-                             .f = repairNfilt_with_DADA2, # Reusing the wrapper function
-                             .options = furrr::furrr_options(seed = TRUE))
-    tictoc::toc()
+# Execute repair in parallel ----
+# Uses the same filtering function but essentially just resynchronizes pairs
+tictoc::tic()
 
-    # Summarize repair results ----
-    all_repaired <- all_filtered_out_fun_repaired2 %>% 
-      dplyr::rename("Unique_File_name_Primer" = "Unique_File_name",
-                    "Primer detected reads"   = "reads.in",
-                    "Repaired reads"          = "reads.out") %>% 
-      dplyr::mutate(Proportion = round((`Repaired reads` / 
-                                          `Primer detected reads` * 100), 
-                                       digits = 2)) %>% 
-      BiocGenerics::unique()
+all_filtered_out_fun_repaired2 <- 
+  furrr::future_pmap_dfr(list(repair_files_per_primer$Unique_File_name_Primer,
+                              repair_files_per_primer$FWD_R1_cutadapt,
+                              repair_files_per_primer$FWD_R2_cutadapt,
+                              repair_files_per_primer$FWD_R1_repaired,
+                              repair_files_per_primer$FWD_R2_repaired),
+                         .f = repairNfilt_with_DADA2, # Reusing the wrapper function
+                         .options = furrr::furrr_options(seed = TRUE))
+tictoc::toc()
 
-    all_repaired
-    ```
+# Summarize repair results ----
+all_repaired <- all_filtered_out_fun_repaired2 %>% 
+  dplyr::rename("Unique_File_name_Primer" = "Unique_File_name",
+                "Primer detected reads"   = "reads.in",
+                "Repaired reads"          = "reads.out") %>% 
+  dplyr::mutate(Proportion = round((`Repaired reads` / 
+                                      `Primer detected reads` * 100), 
+                                   digits = 2)) %>% 
+  BiocGenerics::unique()
+
+all_repaired
+```
 
 ### Learn Error Rates and Infer ASVs
 
