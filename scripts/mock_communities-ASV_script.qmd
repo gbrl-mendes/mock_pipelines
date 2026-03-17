@@ -1,6 +1,6 @@
 ---
 title: "Mock Communities ASV analyses"
-author: "Gabriel A. Mendes"
+author: "Gabriel A. Mendes", "Heron OH"
 format: html
 editor: visual
 editor_options: 
@@ -370,10 +370,11 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
               file.path(multiqc_path,
                         paste0(PRJ, "--sequencing_quality-MultiQC_report.html")))
             system(cmd_multiqc)
+            
+      # 3. Show MultQC report
+        browseURL(file.path(multiqc_path, 
+                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
     }
-    # Show MultQC report
-    browseURL(file.path(multiqc_path, 
-                        paste0(PRJ, "--sequencing_quality-MultiQC_report.html")))
     ```
 
 ### Primer detection Analysis
@@ -875,6 +876,10 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
                     `Read file` = stringr::str_replace_all(string = `Read file`,
                                                            pattern = "paired",
                                                            replacement = "cutadapt"))
+    
+    # Combine input (paired) and output (cutadapt) metadata
+    cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     
+                                             paired_files_per_primer)
 
     # OPTIONAL Separate paths by primer if multiple primers exist per sample 
     cut_files_per_primer_ <- cut_files_per_primer %>% 
@@ -888,10 +893,6 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
                                    replacement = paste0(cutadapt_libs, "/", 
                                                         Primer, "--")),
         TRUE ~ `Read file`))
-
-    # Combine input (paired) and output (cutadapt) metadata
-    cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     
-                                             paired_files_per_primer)
     ```
 
 -   **Extract primer sequences.** For each primer set, retrieve the forward and reverse primer sequences — and their reverse complements — from the orientations table. These are needed to construct the correct adapter flags for both R1 and R2 reads, accounting for read-through at the 3′ end.
@@ -1203,11 +1204,75 @@ After running Cutadapt, it is important to confirm that primer sequences were ef
         }
     ```
 
+#### Quality checking post Cutadapt
+
+With primers removed by Cutadapt, it is possible to assess the intrinsic quality of the reads before defining the filtering parameters. This step runs FastQC and MultiQC on the trimmed output files, generating interactive reports per project. The resulting quality profiles — particularly per-position quality scores and read length distributions — should directly inform the truncLen and maxEE values used in filterAndTrim in the next step.
+
+-   **Check that trimmed files exist.** Confirms that Cutadapt output files exist before running FastQC/MultiQC.
+
+    ```{r}
+    read_files <- cut_files_per_primer %>%
+      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
+      dplyr::pull(`Read file`) %>%
+      normalizePath() %>%
+      unique()
+
+    read_files
+
+    if (length(read_files) > 0) {
+      
+      message(length(read_files), " read files found for QC.")
+      
+      } else {
+
+        stop("No read files found for QC. Check `Raw data path` and file names.")
+      }
+    ```
+
+-   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
+
+    ```{r}
+    for (PRJ in all_projects) {
+      # Create output directories
+      fastqc_path  <- file.path(qual_path, PRJ, "fastqc")
+      multiqc_path <- file.path(qual_path, PRJ, "multiqc")
+      
+      dir.create(fastqc_path,  recursive = TRUE, showWarnings = FALSE)
+      dir.create(multiqc_path, recursive = TRUE, showWarnings = FALSE)
+      
+      # Filter reads belonging to this project
+      cutadapted_path <- 
+    cut_files_per_primer$`Read file`[cut_files_per_primer$Project == PRJ] %>%
+    unique()
+      
+      project_reads <- 
+    read_files[stringr::str_detect(read_files, paste0(cutadapted_path, collapse = "|"))]
+      
+      # 1. Run FastQC (requires GNU parallel + FastQC installed)
+        cmd_fastqc <- paste0(
+          "echo '", paste(project_reads, collapse = "\n"), "' | ",
+          "parallel fastqc {1} -t 20 -o ", fastqc_path)
+        system(cmd_fastqc)
+        
+      # 2. Run MultiQC
+        cmd_multiqc <- paste0(
+          "multiqc --interactive ",
+          fastqc_path, " --filename ",
+          file.path(multiqc_path,
+                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
+        system(cmd_multiqc)
+        
+      # 3. Show MultQC report
+        browseURL(file.path(multiqc_path, 
+                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
+    }
+    ```
+
 #### Filter and Trim
 
 With primers removed by Cutadapt, reads now reflect only the biological sequence of the target amplicon and are ready for quality-based filtering. Unlike the pre-filtering step — which targeted only ambiguous bases — `filterAndTrim` is now applied with parameters that directly evaluate read quality, length, and integrity before ASV inference.
 
--   Prepare file paths. Map Cutadapt output files to new filtered output paths.
+-   **Prepare file paths.** Map Cutadapt output files to new filtered output paths.
 
     ```{r}
     # Map Cutadapt output to filtered file paths
@@ -1228,7 +1293,7 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
                Unique_File_name, Primer)
     ```
 
--   Define filtering function. Create a wrapper for `filterAndTrim` applying quality thresholds.
+-   **Define filtering function.** Create a wrapper for `filterAndTrim` applying quality thresholds.
 
     The key parameters to adjust for your dataset are:
 
