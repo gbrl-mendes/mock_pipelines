@@ -23,7 +23,7 @@ editor_options:
     library(dada2)
     library(DECIPHER)
     library(future)
-    library(virids)
+    library(viridis)
     library(ggh4x)
     library(furrr)
     library(writexl)
@@ -35,7 +35,7 @@ editor_options:
 -   **Create directory structure.** Define project paths and create the directory structure required by the pipeline.
 
     ```{r}
-    # Base path  
+    # Project folder path  
     prjct_path <- "/home/gabriel/projetos/mock_pipelines"
 
     # Derived paths
@@ -69,6 +69,7 @@ editor_options:
       }
     }
 
+    # Files in the project folder
     list.files(prjct_path)
     ```
 
@@ -188,37 +189,40 @@ editor_options:
 
 ### Load Samples table
 
-This is the most important input on the analysis, along with the raw data. The *Samples Table* holds the information of the samples file names, primers, controls, indexes, different projects. An example of this table can be found. *After filling in the table, save it as .csv an place it on the data folder, inside the project's main directory.*
+This is the most important input on the analysis, along with the raw data. The *primer_n_samples Table* holds the information of the samples file names, primers, controls, indexes, different projects. **All names under the Unique_file_name colunm must be unique.**
 
--   Load primers indexes and samples table
+After filling in the table, save it as .csv an place it on the data folder, inside the project's main directory.
+
+-   **Load primers, indexes and samples table.** Reads the configuration CSV containing sample metadata, primers, indexes, and project assignments.
 
     ```{r}
     primers_n_samples <- 
       readr::read_csv(file = file.path(prjct_path, "data", "mock_primer_n_samples.csv"))
 
+    # Show if the primer_n_samples table was loaded successfully
     primers_n_samples %>% 
       View()
     ```
 
--   Check if file names are really unique
+-   **Check if file names are really unique.** Validates that Unique_File_name and Sample columns contain no duplicates, stopping execution if found.
 
     ```{r}
     if (nrow(primers_n_samples) != length(unique(primers_n_samples$Unique_File_name))) {
-      print("Your file names are not unique")
-      print(paste0("The file names:"))
-      print(paste0(primers_n_samples$Unique_File_name[duplicated(primers_n_samples$Unique_File_name)], collapse = "\n "))
-      print(paste0("apear more than once"))
+      message("Your file names are not unique")
+      message(paste0("The file names:"))
+      message(paste0(primers_n_samples$Unique_File_name[duplicated(primers_n_samples$Unique_File_name)], collapse = "\n "))
+      message(paste0("apear more than once"))
       } else if (nrow(primers_n_samples) != length(unique(primers_n_samples$Sample))) {
-        print("Your Sample names are not unique")
-        print(paste0("The sample names:"))
+        message("Your Sample names are not unique")
+        message(paste0("The sample names:"))
         cat(paste0(primers_n_samples$Sample[duplicated(primers_n_samples$Sample)], collapse = "\n "))
-        print(paste0("apear more than once"))
+        message(paste0("apear more than once"))
         } else {
-          print("All file names and sample names are unique!")
+          message("All file names and sample names are unique!")
           }
     ```
 
--   Defining all separate projects to analyze independently
+-   **Defining all separate projects to analyze independently.** Extracts and lists all unique project names from the samples table.
 
     ```{r}
     all_projects <- 
@@ -232,7 +236,7 @@ This is the most important input on the analysis, along with the raw data. The *
     message()
     ```
 
--   Identify files names radicals and levels
+-   **Identify files names radicals and levels.** Displays raw Unique_File_name values for manual inspection and establishes factor levels for consistent plotting order.
 
     ```{r}
     # if you need to print sample names and sort them yourself ----
@@ -241,9 +245,9 @@ This is the most important input on the analysis, along with the raw data. The *
 
     # organize sample names in the order they will be printed on plots and results tables ----
     # sample_levels <- c(primers_n_samples$Unique_File_name) %>% unique()
-    sample_levels <- 
-      c(primers_n_samples$Sample) %>% unique()
+    sample_levels <- c(primers_n_samples$Sample) %>% unique()
 
+    # Show sample names
     sample_levels
     ```
 
@@ -327,8 +331,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
 -   **Check that demultiplexed files exist.** Confirms that the paths in `primers_n_samples` actually contain FASTQ files before running FastQC/MultiQC.
 
     ```{r}
-    read_files <- 
-      primers_n_samples %>%
+    read_files <- primers_n_samples %>%
       dplyr::mutate(Read_file_pattern = file.path(`Raw data path`,
                                                   paste0(Unique_File_name, "*"))) %>%
       dplyr::pull(Read_file_pattern) %>%
@@ -392,7 +395,8 @@ The raw sequencing reads are assessed for overall quality before any processing 
 
     ```{r}
     # Base directory of the read files (assumes all reads share the same root as the first file)
-    data_dir <- dirname(read_files)
+    data_dir <- dirname(read_files) %>% 
+      unique()
 
     # List all forward (R1) FASTQ files using common naming patterns
     R1_pattern <- "_R1_001.fastq|_R1_001.fastq.gz|\\.1.fastq|\\.R1.fastq|R1.fq|R1.fastq|1.fq.gz|-R1.fastq.gz"
@@ -402,8 +406,6 @@ The raw sequencing reads are assessed for overall quality before any processing 
                            full.names = TRUE) %>%
       sort()
 
-    all_fnFs
-
     # List all reverse (R2) FASTQ files using common naming patterns
     R2_pattern <- "_R2_001.fastq|_R2_001.fastq.gz|\\.2.fastq|\\.R2.fastq|R2.fq|R2.fastq|2.fq.gz|-R2.fastq.gz"
 
@@ -412,7 +414,23 @@ The raw sequencing reads are assessed for overall quality before any processing 
                            full.names = TRUE) %>%
       sort()
 
-    all_fnRs
+    # Final verification message
+    n_R1 <- length(all_fnFs)
+    n_R2 <- length(all_fnRs)
+
+    if (n_R1 == n_R2 && n_R1 > 0) {
+      message("✓ Paired: ", n_R1, " R1 files match exactly the ", n_R2, " R2 files.\n", 
+              "\nVerify if all expected pairs are listed:\n", 
+              "\nR1 files:\n", paste0("  ", basename(all_fnFs), collapse = "\n"),
+              "\n",
+              "\nR2 files:\n", paste0("  ", basename(all_fnRs), collapse = "\n"))
+    } else {
+      message("✗ MISMATCH: ", n_R1, " R1 files vs ", n_R2, " R2 files.",
+              "\nR1 files:\n", paste0("  ", basename(all_fnFs), collapse = "\n"),
+              "\n",
+              "\nR2 files:\n", paste0("  ", basename(all_fnRs), collapse = "\n"),
+              "\nCheck file names in `primers_n_samples` match actual FASTQ files on disk.")
+    }
     ```
 
 -   **Match files to samples.** Associates each sample in primers_n_samples with its corresponding R1/R2 files by matching directory path and Unique_File_name.
@@ -445,6 +463,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
         BiocGenerics::unique() %>% .[1]
       }
 
+    # Show table
     View(sample_idx_tbl_wide)
     ```
 
@@ -464,6 +483,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
         values_to = "Read file") %>%
       dplyr::mutate(Unique_File_name_Primer = Unique_File_name)
 
+    # Show table
     View(sample_idx_tbl)
     ```
 
@@ -514,6 +534,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
       `IUPAC sequence` = all_primers) %>%
       dplyr::mutate(`Regex sequence` = iupac2seq(`IUPAC sequence`))
 
+    # Show primers
     all_primers_tbl
     ```
 
@@ -525,40 +546,49 @@ The raw sequencing reads are assessed for overall quality before any processing 
                                           allOrients) %>%
       dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, 
                                                             "__.*.$"))
-
+    # Inspect primers orientations
     View(primers_all_orients)
     ```
 
 #### Per-file primer hits
 
--   **Per‑file primer hits.** Counts the number of reads that contain a given primer pattern (with up to 1 mismatch).
+-   **Define primer counting function.** The function `multi_primerHits()` applies `primerHits()` across all primer orientations for a single FASTQ file, returning a table of hit counts per orientation. Defining it here keeps the primer-counting logic close to where it is used.
 
     ```{r}
-    # Select only raw forward reads (R1/R2) for primer detection
+    multi_primerHits <- function(Read_file, primers) {
+      primer_counts <- purrr::map_df(primers,
+                                     .f = primerHits,
+                                     file_name = Read_file)
+      primer_counts %>%
+        dplyr::mutate(`Read file` = Read_file)
+    }
+    ```
+
+-   **Per‑file primer hits.** Counts the number of reads that contain a given primer pattern (with up to 1 mismatch). All four orientations generated by `allOrients()` — Forward, Complement, Reverse, and RevComp — are searched simultaneously against each R1 and R2 file, enabling detection of primers regardless of read orientation or library preparation strategy. The resulting table is then joined with sample metadata and annotated with total read counts per file to allow proportional comparisons across samples.
+
+    ```{r}
+    # Select only raw reads (R1/R2) for primer detection
     reads_seqs_tbl <- 
       sample_idx_tbl %>%
       dplyr::filter(Stage %in% c("FWD_R1", "FWD_R2")) %>%
       dplyr::select(`Read file`, Unique_File_name)
 
-    reads_seqs_tbl
-
     # Create named vector of FASTQ paths (names = sample identifiers)
     reads_seqs <- reads_seqs_tbl$`Read file`
     names(reads_seqs) <- reads_seqs_tbl$Unique_File_name
 
-    reads_seqs
-
-    # Extract all primer sequences as named vector for counting
+    # Extract all primer orientations as named vector for counting
     primers_seqs <- primers_all_orients %>%
       dplyr::pull(Sequence, name = `Orientation name`)
-
-    primers_seqs
 
     # Set up parallel processing (all cores minus 2)
     cores_to_use <- future::availableCores() - 2
     future::plan(future::multisession(workers = cores_to_use))
 
-    # Count primer occurrences across all files x all primers (parallel)
+    message("Searching primers across ", length(reads_seqs), " files using ",
+            cores_to_use, " cores. This may take a few minutes...")
+
+    # Count primer occurrences across all files x all primer orientations (parallel)
     primers_in_Nreads <- furrr::future_map_dfr(reads_seqs, 
                                                .f = multi_primerHits,
                                                primers = primers_seqs,
@@ -575,6 +605,11 @@ The raw sequencing reads are assessed for overall quality before any processing 
                    sep = " ",
                    remove = FALSE) %>%
       dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = `Read file`)[, 1])
+
+    message("✓ Primer search complete. Results in `primers_in_Nreads`:\n",
+            "  ", length(unique(primers_in_Nreads$Unique_File_name)), " samples × ",
+            length(primers_seqs), " primer orientations across ",
+            length(reads_seqs), " files.")
     ```
 
 #### Primers identified in each sample
@@ -607,6 +642,9 @@ The raw sequencing reads are assessed for overall quality before any processing 
       dplyr::select(where(function(x) any(!is.na(x)))) %>% 
       # Filter out primers with zero counts
       dplyr::filter(Count != 0)
+
+    #View table
+    View(primers_in_Nreads_long)
     ```
 
 -   **Configure plot settings.** Load necessary visualization libraries and define the factor levels for sample ordering in the plots.
@@ -618,7 +656,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
       base::unique()
     ```
 
--   **Generate and save plots.** Iterate through each project to create specific primer abundance plots. The loop filters data per project, generates a tile/bar plot showing primer presence and proportion, and saves the output as a PDF.
+-   **Generate diagnostic plot.** Iterate through each project to create specific primer abundance plots. The loop filters data per project, generates a tile/bar plot showing primer presence and proportion, and saves the output as a PDF.
 
     ```{r}
     # Loop through all projects defined in the workflow
@@ -698,7 +736,8 @@ The raw sequencing reads are assessed for overall quality before any processing 
                             space = "free")
 
       # 4. Save the plot
-      ggplot2::ggsave(file = paste0(results_path, "/", PRJ, 
+      ggplot2::ggsave(file = paste0(results_path, "/", 
+                                    PRJ, 
                                     "-primers_found_in_reads_1e.pdf"),
                       plot = primers_tile,
                       device = "pdf",
@@ -707,6 +746,10 @@ The raw sequencing reads are assessed for overall quality before any processing 
                       units = "cm",
                       limitsize = FALSE,
                       dpi = 600)
+       
+      browseURL(paste0(results_path, "/", 
+                          PRJ, 
+                          "-primers_found_in_reads_1e.pdf"))
       }
     ```
 
@@ -861,7 +904,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
                                .options = furrr::furrr_options(seed = TRUE))
       tictoc::toc()
     }
-    
+
     # Generate summary table
     pre_filtered_summary <- all_filtered_out_fun %>%
       dplyr::mutate(Proportion = round((reads.out / reads.in * 100), 
@@ -1073,81 +1116,107 @@ After running Cutadapt, it is essential to confirm that primer sequences were ef
                                      "Run"),
                      names_from  = "Stage",
                      values_from = "Read file")
-    
+
     # View result
     cutadapt_check_files
     ```
 
--   **Count primer hits in Cutadapt output.** Apply the `**primerHits**` function across all trimmed samples, mirroring the approach used during raw read inspection.
+-   **Prepare primer pairs table.** Build a compact reference table with one row per primer pair, containing the forward and reverse sequences in their biologically relevant orientations.
 
     ```{r}
-    # Apply primerHits to all cutadapt output files
-    primers_in_cutadapt_reads <- purrr::pmap_dfr(
-      list(cutadapt_check_files$Unique_File_name_Primer,
-       cutadapt_check_files$FWD_R1_cutadapt,
-       cutadapt_check_files$FWD_R2_cutadapt),
-      function(sample_name, R1, R2) {
+    primer_pairs_tbl <- primers_all_orients %>% 
+      dplyr::filter(`Primer orientation` == "Forward") %>%
+      dplyr::select(`Primer pair`, Primer, Sequence) %>%
+      tidyr::pivot_wider(id_cols = `Primer pair`,
+                         names_from = Primer,
+                         values_from = Sequence,
+                         names_sep = "_")
+    # View result
+    primer_pairs_tbl
+    ```
 
-    purrr::map_dfr(primers_all_orients %>%
-                     dplyr::pull(`Primer pair`) %>%
-                     unique(),
-                   function(PRIMER_SET) {
-                     
-                     fwd_seq <- primers_all_orients$Sequence[grep(paste0(str_extract(PRIMER_SET, 
-                                                                                     "^[^_]+"), "_FWD_Forward"),
-                                                                  primers_all_orients$`Orientation name`)]
-                     
-                     rev_seq <- primers_all_orients$Sequence[grep(paste0(str_extract(PRIMER_SET, 
-                                                                                     "^[^_]+"), "_REV_Forward"),
-                                                                  primers_all_orients$`Orientation name`)]
-                     
-                     rbind(primerHits(primer = fwd_seq, file_name = R1),
-                           primerHits(primer = rev_seq, file_name = R2)) %>%
-                       dplyr::mutate(Sample = sample_name,
-                                     `Primer pair` = PRIMER_SET, 
-                                     File = c("R1", "R2"))})
-    }
+-   **Define helper function to check one sample.** For a given sample and its R1/R2 Cutadapt files, count residual hits of each primer pair.
+
+    ```{r}
+    check_one_sample_cutadapt <- function(sample_name,
+                                          R1_file,
+                                          R2_file,
+                                          primer_pairs_tbl) {
+      
+      purrr::map_dfr(primer_pairs_tbl$`Primer pair`, 
+                     function(PRIMER_SET) {
+                       
+                       fwd_seq <- primer_pairs_tbl %>%
+                         dplyr::filter(`Primer pair` == PRIMER_SET) %>%
+                         dplyr::pull(dplyr::ends_with("FWD")) %>%
+                         .[[1]]
+                       
+                       rev_seq <- primer_pairs_tbl %>%
+                         dplyr::filter(`Primer pair` == PRIMER_SET) %>%
+                         dplyr::pull(dplyr::ends_with("REV")) %>%
+                         .[[1]]
+                       
+                       rbind(primerHits(primer = fwd_seq, file_name = R1_file),
+                             primerHits(primer = rev_seq, file_name = R2_file)) %>%
+                         dplyr::mutate(Sample = sample_name,
+                                       `Primer pair` = PRIMER_SET,
+                                       File = c("R1", "R2"))
+                       }
       )
+    }
     ```
 
--   **Prepare data.** Transform the primer hits table into long format for visualization, filtering out zero counts.
+-   **Count residual primer hits across all samples** Apply the helper function to every sample with Cutadapt outputs.
 
     ```{r}
+    primers_in_cutadapt_reads <- 
+      purrr::pmap_dfr(list(cutadapt_check_files$Unique_File_name_Primer,
+                           cutadapt_check_files$FWD_R1_cutadapt,
+                           cutadapt_check_files$FWD_R2_cutadapt),
+                      check_one_sample_cutadapt,
+                      primer_pairs_tbl = primer_pairs_tbl)
+
+    # View result
+    primers_in_cutadapt_reads
+    ```
+
+-   **Summarize and reshape for inspection.** Join metadata, compute total reads per file, and convert to long format to inspect which primer pairs still leave residual signal.
+
+    ```{r}
+    # Add metadata and total reads per file
+    primers_in_cutadapt_reads <- primers_in_cutadapt_reads %>%
+      dplyr::left_join(cutadapt_check_files, 
+                       by = c("Sample" = "Unique_File_name_Primer")) %>%
+      dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = FWD_R1_cutadapt)[, 1] +
+                      ShortRead::countFastq(dirPath = FWD_R2_cutadapt)[, 1])
+
+    # Reshape to long format and filter non‑zero hits
     primers_in_cutadapt_reads_long <- primers_in_cutadapt_reads %>%
-      dplyr::select(!dplyr::ends_with(c("_Complement", 
-                                        "_Reverse"))) %>%
-      tidyr::gather(key   = Sequences,
-                    value = Count,
-                    ends_with("FWD_Forward"),
-                    ends_with("FWD_RevComp"),
-                    ends_with("REV_Forward"),
-                    ends_with("REV_RevComp")) %>%
-      dplyr::mutate(Sequences = as.factor(Sequences),
-                    Sample = as.factor(Sample)) %>%
-      dplyr::select(where(function(x) any(!is.na(x))))
+      dplyr::filter(File %in% c("R1", "R2")) %>%
+      dplyr::mutate(Sample = factor(Sample, levels = Unique_File_name_Primer),
+                    Pct_reads = (..density.. * 100))
 
-    # Inspect: if this table is empty, primer removal was successful across all samples
-    primers_in_cutadapt_reads_long %>%
-      dplyr::filter(Count != 0)
-
+    # View result
+    primers_in_cutadapt_reads_long
     ```
 
--   **Generate and save plots.** If residual primers are detected, visualize their distribution across samples using the same plotting approach as in the raw read inspection step.
-
-    The plot uses the same structure as the raw primer visualization, allowing direct comparison between pre- and post-Cutadapt primer counts. If all primer removal was successful, the filtered table will be empty and no plot needs to be saved.
+-   **Generate diagnostic plot.** If residual primers are detected, visualize their distribution across samples.
 
     ```{r}
-    if (nrow(dplyr::filter(primers_in_cutadapt_reads_long, Count != 0)) > 0) {
+    # Only generate plots if residual primers found
+    residual_hits <- primers_in_cutadapt_reads_long %>%
+      dplyr::filter(Count > 0)
+
+    if (nrow(residual_hits) > 0) {
       
       for (PRJ in all_projects) {
         
         options(scipen = 10000)
         
-        # 1. Filter and prepare data ONCE for the current project
+        # 1. Filter and prepare data for the current project
         # This avoids filtering the large dataset multiple times inside the loop
-        project_data <- primers_in_cutadapt_reads_long %>%
-          dplyr::filter(Count != 0,
-                        Project == PRJ) %>%
+        project_data <- residual_hits  %>%
+          dplyr::filter(Project == PRJ) %>%
           dplyr::mutate( 
             
             # Pre-format labels and calculate percentages to keep ggplot clean
@@ -1159,8 +1228,8 @@ After running Cutadapt, it is essential to confirm that primer sequences were ef
         n_samples <- length(unique(project_data$Sample))
         n_primers <- length(unique(project_data$`Primer pair`))
         
-        # 3. Create the plot object
-        primers_tile_cutadapt <- project_data %>%
+        # 3. Create the plot 
+        primers_tile_residual <- project_data %>%
           ggplot2::ggplot(aes(y = Sample)) +
           # Bar layer
           ggplot2::geom_bar(aes(x = `Total reads`,
@@ -1179,7 +1248,7 @@ After running Cutadapt, it is essential to confirm that primer sequences were ef
                              size = 1) +
           # Color scales
           ggplot2::scale_fill_gradientn(
-            name    = "Proportion of reads\n     with primer (%)",
+            name    = "Residual primer\nproportion (%)",
             colours = c("white", "red", "yellow", "green", "dark green"),
             values  = c(0, 1),
             na.value = "white") +
@@ -1205,8 +1274,8 @@ After running Cutadapt, it is essential to confirm that primer sequences were ef
                               color = "darkgrey") +
           
           # Titles and Facets
-          ggplot2::labs(title = paste0(PRJ, " — Post-Cutadapt Primer Check"),
-                        subtitle = "Residual primer hits after Cutadapt trimming.\nAll counts should be zero. Non-zero values require investigation.",
+          ggplot2::labs(title = paste0(PRJ, " — Post-Cutadapt Residual Primers"),
+                        subtitle = "Non-zero counts indicate incomplete primer removal.\nCheck Cutadapt flags and primer orientations.",
                         x = "Primers",
                         y = "Sample") +
           ggplot2::facet_grid(rows = vars(Primer_lbl),
@@ -1216,8 +1285,8 @@ After running Cutadapt, it is essential to confirm that primer sequences were ef
         
         # 4. Save the plot
         ggplot2::ggsave(
-          file = paste0(results_path, "/", PRJ, "-primers_found_after_cutadapt.pdf"),
-          plot = primers_tile_cutadapt,
+          file = paste0(results_path, "/", PRJ, "-residual_primers_post_cutadapt.pdf"),
+          plot = primers_tile_residual,
           device= "pdf",
           width = 10 + (n_primers * 10),
           height = (n_samples * 0.3) + 3,
@@ -1391,7 +1460,7 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
                                .options = furrr::furrr_options(seed = TRUE))
       tictoc::toc()
     }
-    
+
     # Generate summary table
     all_filtered_summary <- all_filtered_out_fun %>%
       dplyr::mutate(Proportion = round((reads.out / reads.in * 100), digits = 2)) %>%
