@@ -23,11 +23,16 @@ editor_options:
     library(dada2)
     library(DECIPHER)
     library(future)
+    library(virids)
+    library(ggh4x)
+    library(furrr)
+    library(writexl)
+    library(tictoc)
     ```
 
 ### Directory Management
 
--   **Create directory structure.** Define project paths and ensure folders for scripts, results, figures, and tables exist.
+-   **Create directory structure.** Define project paths and create the directory structure required by the pipeline.
 
     ```{r}
     # Base path  
@@ -35,18 +40,18 @@ editor_options:
 
     # Derived paths
     {
-      data_path <- paste0(prjct_path, "/data")
-      pipe_libs <- paste0(data_path, "/reads")
-      raw_libs <- paste0(pipe_libs, "/raw")
-      paired_libs <- paste0(pipe_libs, "/paired")
-      cutadapt_libs <- paste0(pipe_libs, "/cutadapt")
-      qual_path <- paste0(prjct_path, "/quality")
-      results_path <- paste0(prjct_path, "/results")
-      blast_path <- paste0(results_path, "/blast")
-      swarm_path <- paste0(results_path, "/swarm")
-      dmx_path <- paste0(pipe_libs, "/dmx")
-      dmx_all_path <- paste0(dmx_path, "/all_dmx")
-      dmx_combined_path <- paste0(dmx_path, "/all_combined")
+      data_path <- file.path(prjct_path, "/data")
+      pipe_libs <- file.path(data_path, "/reads")
+      raw_libs <- file.path(pipe_libs, "/raw")
+      paired_libs <- file.path(pipe_libs, "/paired")
+      cutadapt_libs <- file.path(pipe_libs, "/cutadapt")
+      qual_path <- file.path(prjct_path, "/quality")
+      results_path <- file.path(prjct_path, "/results")
+      blast_path <- file.path(results_path, "/blast")
+      swarm_path <- file.path(results_path, "/swarm")
+      dmx_path <- file.path(pipe_libs, "/dmx")
+      dmx_all_path <- file.path(dmx_path, "/all_dmx")
+      dmx_combined_path <- file.path(dmx_path, "/all_combined")
     }
 
     # Paths to be created
@@ -144,7 +149,7 @@ editor_options:
     source("/home/heron/prjcts/ecomol/R/dmx_metabar.R")
     ```
 
--   **Define Global Color Palettes.** Set consistent color schemes for TERMINAR.
+-   **Define Global Color Palettes.** Set consistent color schemes for plots.
 
     ```{r}
     # Color for each read situation 
@@ -189,7 +194,7 @@ This is the most important input on the analysis, along with the raw data. The *
 
     ```{r}
     primers_n_samples <- 
-      readr::read_csv(file = "~/projetos/mock_pipelines/data/mock_primer_n_samples.csv")
+      readr::read_csv(file = file.path(prjct_path, "data", "mock_primer_n_samples.csv"))
 
     primers_n_samples %>% 
       View()
@@ -317,6 +322,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
 ### Quality checking
 
+The raw sequencing reads are assessed for overall quality before any processing steps. This step runs FastQC and MultiQC on the demultiplexed files, generating per-project interactive reports. The resulting quality profiles — particularly per-position quality scores, GC content, and read length distributions — provide the baseline needed to interpret subsequent primer detection and filtering results.
+
 -   **Check that demultiplexed files exist.** Confirms that the paths in `primers_n_samples` actually contain FASTQ files before running FastQC/MultiQC.
 
     ```{r}
@@ -334,7 +341,7 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
     if (length(read_files) > 0) {
       message(length(read_files), " read files found for QC.")
       } else {
-        stop("No read files found for QC. Check `Raw data path` and file names.")
+        stop("No read files found for QC. Check `Raw data path` and file names `primers_n_samples`.")
         }
     ```
 
@@ -364,16 +371,16 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
             system(cmd_fastqc)
             
       # 2. Run MultiQC
+            report_name <- paste0(PRJ, "--sequencing_quality-MultiQC_report.html")
+             
             cmd_multiqc <- paste0(
               "multiqc --interactive ",
               fastqc_path, " --filename ",
-              file.path(multiqc_path,
-                        paste0(PRJ, "--sequencing_quality-MultiQC_report.html")))
+              file.path(multiqc_path, report_name))
             system(cmd_multiqc)
             
       # 3. Show MultQC report
-        browseURL(file.path(multiqc_path, 
-                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
+            browseURL(file.path(multiqc_path, report_name))
     }
     ```
 
@@ -381,30 +388,36 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
 #### Identify paired-end read files
 
--   **Map R1/R2 reads to samples.** Builds a table linking each `Unique_File_name` to the corresponding R1/R2 FASTQ files and to future paired‑output paths.
+-   **List R1/R2 files.** Scans the raw data directory for FASTQ files matching common Illumina naming patterns for forward and reverse reads.
 
     ```{r}
     # Base directory of the read files (assumes all reads share the same root as the first file)
     data_dir <- dirname(read_files)
 
     # List all forward (R1) FASTQ files using common naming patterns
-    all_fnFs <-
-      list.files(data_dir,
-                 pattern   = "_R1_001.fastq|_R1_001.fastq.gz|\\.1.fastq|\\.R1.fastq|R1.fq|R1.fastq|1.fq.gz|-R1.fastq.gz",
-                 full.names = TRUE) %>%
+    R1_pattern <- "_R1_001.fastq|_R1_001.fastq.gz|\\.1.fastq|\\.R1.fastq|R1.fq|R1.fastq|1.fq.gz|-R1.fastq.gz"
+
+    all_fnFs <- list.files(data_dir, 
+                           pattern = R1_pattern,
+                           full.names = TRUE) %>%
       sort()
 
     all_fnFs
 
     # List all reverse (R2) FASTQ files using common naming patterns
-    all_fnRs <-
-      list.files(data_dir,
-                 pattern   = "_R2_001.fastq|_R2_001.fastq.gz|\\.2.fastq|\\.R2.fastq|R2.fq|R2.fastq|2.fq.gz|-R2.fastq.gz",
-                 full.names = TRUE) %>%
+    R2_pattern <- "_R2_001.fastq|_R2_001.fastq.gz|\\.2.fastq|\\.R2.fastq|R2.fq|R2.fastq|2.fq.gz|-R2.fastq.gz"
+
+    all_fnRs <- list.files(data_dir, 
+                           pattern = R2_pattern,
+                           full.names = TRUE) %>%
       sort()
 
     all_fnRs
+    ```
 
+-   **Match files to samples.** Associates each sample in primers_n_samples with its corresponding R1/R2 files by matching directory path and Unique_File_name.
+
+    ```{r}
     # Initialize sample table with metadata and empty columns for R1/R2 paths
     sample_idx_tbl_wide <- primers_n_samples %>%
       dplyr::select("Unique_File_name", "Lib", "Run", "Project",
@@ -417,9 +430,9 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
     # For each sample, find the corresponding R1 and R2 files by matching path + Unique_File_name
     for (i in seq_len(nrow(sample_idx_tbl_wide))) {
-      pattern_i <- 
-        paste0(sample_idx_tbl_wide$`Raw data path`[i], "/",
-               sample_idx_tbl_wide$Unique_File_name[i], "_")
+      
+      pattern_i <- paste0(sample_idx_tbl_wide$`Raw data path`[i], "/",
+                          sample_idx_tbl_wide$Unique_File_name[i], "_")
       
       # Match forward read (R1) file
       sample_idx_tbl_wide$FWD_R1[i] <- 
@@ -430,11 +443,15 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
       sample_idx_tbl_wide$FWD_R2[i] <- 
         all_fnRs[BiocGenerics::grep(pattern_i, all_fnRs)] %>%
         BiocGenerics::unique() %>% .[1]
-    }
+      }
 
     View(sample_idx_tbl_wide)
+    ```
 
-    # Create paths for the future paired-output files and reshape to long format
+-   **Build long-format file table.** Adds paths for future paired-output files and reshapes the table to long format, with one row per file per stage.
+
+    ```{r}
+        # Create paths for the future paired-output files and reshape to long format
     sample_idx_tbl <- 
       sample_idx_tbl_wide %>%
       dplyr::mutate(FWD_R1_paired = file.path(paired_libs,
@@ -449,6 +466,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
     View(sample_idx_tbl)
     ```
+
+#### Primer database and orientations
 
 -   **Primer database.** Primer names and sequences (with IUPAC codes where applicable). Comments are retained only where they document the biological identity of the primers.
 
@@ -509,6 +528,8 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
     View(primers_all_orients)
     ```
+
+#### Per-file primer hits
 
 -   **Per‑file primer hits.** Counts the number of reads that contain a given primer pattern (with up to 1 mismatch).
 
@@ -591,10 +612,6 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 -   **Configure plot settings.** Load necessary visualization libraries and define the factor levels for sample ordering in the plots.
 
     ```{r}
-    # Load visualization libraries
-    library(viridis)
-    library(ggh4x)
-
     # Create levels for Files display on plot based on the prepared data
     Unique_File_name_Read_levels <- primers_in_Nreads_long %>% 
       dplyr::pull(Unique_File_name_Read) %>% 
@@ -827,7 +844,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
 
     ```{r}
     # Setup parallel processing
-    cores_to_be_used <- future::availableCores() - 2 
+    cores_to_use <- future::availableCores() - 2 
     future::plan(future::multisession(workers = cores_to_be_used))
 
     # Run pre-filtering in parallel
@@ -843,8 +860,8 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
                                .f = pre_filter_Ns,
                                .options = furrr::furrr_options(seed = TRUE))
       tictoc::toc()
-      }
-
+    }
+    
     # Generate summary table
     pre_filtered_summary <- all_filtered_out_fun %>%
       dplyr::mutate(Proportion = round((reads.out / reads.in * 100), 
@@ -876,23 +893,23 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
                     `Read file` = stringr::str_replace_all(string = `Read file`,
                                                            pattern = "paired",
                                                            replacement = "cutadapt"))
-    
+
     # Combine input (paired) and output (cutadapt) metadata
     cut_files_per_primer <- dplyr::bind_rows(cut_files_per_primer,     
                                              paired_files_per_primer)
 
     # OPTIONAL Separate paths by primer if multiple primers exist per sample 
-    cut_files_per_primer_ <- cut_files_per_primer %>% 
-      tidyr::separate_longer_delim(cols = "Primer", 
-                                   delim = ";") %>% 
-      dplyr::mutate(`Read file` = dplyr::case_when(
-        Stage %in% c("FWD_R1_cutadapt", 
-                     "FWD_R2_cutadapt") ~ 
-          stringr::str_replace_all(string = `Read file`,
-                                   pattern = paste0(cutadapt_libs, "/"),
-                                   replacement = paste0(cutadapt_libs, "/", 
-                                                        Primer, "--")),
-        TRUE ~ `Read file`))
+    # cut_files_per_primer <- cut_files_per_primer %>% 
+    #   tidyr::separate_longer_delim(cols = "Primer", 
+    #                                delim = ";") %>% 
+    #   dplyr::mutate(`Read file` = dplyr::case_when(
+    #     Stage %in% c("FWD_R1_cutadapt", 
+    #                  "FWD_R2_cutadapt") ~ 
+    #       stringr::str_replace_all(string = `Read file`,
+    #                                pattern = paste0(cutadapt_libs, "/"),
+    #                                replacement = paste0(cutadapt_libs, "/", 
+    #                                                     Primer, "--")),
+    #     TRUE ~ `Read file`))
     ```
 
 -   **Extract primer sequences.** For each primer set, retrieve the forward and reverse primer sequences — and their reverse complements — from the orientations table. These are needed to construct the correct adapter flags for both R1 and R2 reads, accounting for read-through at the 3′ end.
@@ -1020,16 +1037,17 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
       if (length(fnFs_in) > 0) {
         for (i in seq_along(fnFs_in)) {
           system2(command = cutadapt, 
-                  args = c(flags$R1_flags, flags$R2_flags,
-                       "-e = 0.1",
-                       "-j = 70",
-                       "-n", 5,
-                       "--minimum-length = 30",
-                        "--discard-untrimmed",
-                       "--match-read-wildcards",
-                       # "--pair-filter = both",
-                       "-o", fnFs_out[i],
-                       "-p", fnRs_out[i], fnFs_in[i], fnRs_in[i]
+                  args = c(flags$R1_flags, 
+                           flags$R2_flags,
+                           "-e", "0.1",
+                           "-j", "70",
+                           "-n", "5",
+                           "--minimum-length", "30",
+                           "--discard-untrimmed",
+                           "--match-read-wildcards",
+                           # "--pair-filter = both",
+                           "-o", fnFs_out[i],
+                           "-p", fnRs_out[i], fnFs_in[i], fnRs_in[i]
                   ))
           }
         } else {
@@ -1040,20 +1058,29 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
 
 #### Primer Removal Verification
 
-After running Cutadapt, it is important to confirm that primer sequences were effectively removed from all reads before proceeding to quality filtering and ASV inference. All counts are expected to be zero or near-zero; any sample showing consistent primer hits after trimming should be investigated for unexpected primer orientations, chimeric primers, or incorrect flag configuration in the Cutadapt step.
+After running Cutadapt, it is essential to confirm that primer sequences were effectively removed from all reads before proceeding to quality filtering and ASV inference. Any residual primer signal in the trimmed files indicates misconfigured adapter flags, unexpected primer orientations, or issues in the library preparation. This section reuses the primer‑detection logic to count residual primer hits in the Cutadapt outputs and summarizes how clean each sample is.
+
+-   **Collect Cutadapt output files.** Assemble a table of trimmed FASTQ files (R1/R2) per sample and primer set.
+
+    ```{r}
+    # Restrict to Cutadapt outputs (R1/R2 trimmed files that actually exist)
+    cutadapt_check_files <- cut_files_per_primer %>%
+      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
+      dplyr::filter(file.exists(`Read file`)) %>%
+      tidyr::pivot_wider(id_cols = c("Unique_File_name", 
+                                     "Unique_File_name_Primer",
+                                     "Primer", 
+                                     "Run"),
+                     names_from  = "Stage",
+                     values_from = "Read file")
+    
+    # View result
+    cutadapt_check_files
+    ```
 
 -   **Count primer hits in Cutadapt output.** Apply the `**primerHits**` function across all trimmed samples, mirroring the approach used during raw read inspection.
 
     ```{r}
-    # Collect all Cutadapt output files present on disk
-    cutadapt_check_files <- cut_files_per_primer %>%
-      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
-      dplyr::filter(file.exists(`Read file`)) %>%
-      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer",
-                                 "Primer", "Run"),
-                     names_from  = "Stage",
-                     values_from = "Read file")
-
     # Apply primerHits to all cutadapt output files
     primers_in_cutadapt_reads <- purrr::pmap_dfr(
       list(cutadapt_check_files$Unique_File_name_Primer,
@@ -1074,8 +1101,8 @@ After running Cutadapt, it is important to confirm that primer sequences were ef
                                                                                      "^[^_]+"), "_REV_Forward"),
                                                                   primers_all_orients$`Orientation name`)]
                      
-                     rbind(primerHits(primer = fwd_seq, fn = R1),
-                           primerHits(primer = rev_seq, fn = R2)) %>%
+                     rbind(primerHits(primer = fwd_seq, file_name = R1),
+                           primerHits(primer = rev_seq, file_name = R2)) %>%
                        dplyr::mutate(Sample = sample_name,
                                      `Primer pair` = PRIMER_SET, 
                                      File = c("R1", "R2"))})
@@ -1225,7 +1252,7 @@ With primers removed by Cutadapt, it is possible to assess the intrinsic quality
       
       } else {
 
-        stop("No read files found for QC. Check `Raw data path` and file names.")
+        stop("No read files found for QC. Check if Cutadapt ran successfully and output files were written.")
       }
     ```
 
@@ -1255,16 +1282,16 @@ With primers removed by Cutadapt, it is possible to assess the intrinsic quality
         system(cmd_fastqc)
         
       # 2. Run MultiQC
-        cmd_multiqc <- paste0(
-          "multiqc --interactive ",
-          fastqc_path, " --filename ",
-          file.path(multiqc_path,
-                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
-        system(cmd_multiqc)
-        
+            report_name <- paste0(PRJ, "--sequencing_quality-MultiQC_report.html")
+             
+            cmd_multiqc <- paste0(
+              "multiqc --interactive ",
+              fastqc_path, " --filename ",
+              file.path(multiqc_path, report_name))
+            system(cmd_multiqc)
+            
       # 3. Show MultQC report
-        browseURL(file.path(multiqc_path, 
-                    paste0(PRJ, "--primer_removal_quality-MultiQC_report.html")))
+            browseURL(file.path(multiqc_path, report_name))
     }
     ```
 
@@ -1350,75 +1377,30 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
     cores_to_be_used <- future::availableCores() - 2
     future::plan(future::multisession(workers = cores_to_be_used))
 
+    # Run filtering in parallel
     {
       tictoc::tic()
       
-      all_filtered_out_fun <- furrr::future_pmap_dfr(
-    list(filter_files_per_primer$Unique_File_name_Primer,
-         filter_files_per_primer$FWD_R1_cutadapt,
-         filter_files_per_primer$FWD_R2_cutadapt,
-         filter_files_per_primer$FWD_R1_filtered,
-         filter_files_per_primer$FWD_R2_filtered),
-    .f       = quality_filter,
-    .options = furrr::furrr_options(seed = TRUE))
-      
+      all_filtered_out_fun <- 
+        furrr::future_pmap_dfr(list(filter_files_per_primer$Unique_File_name_Primer,
+                                    filter_files_per_primer$FWD_R1_cutadapt,
+                                    filter_files_per_primer$FWD_R2_cutadapt,
+                                    filter_files_per_primer$FWD_R1_filtered,
+                                    filter_files_per_primer$FWD_R2_filtered),
+                               .f = quality_filter,
+                               .options = furrr::furrr_options(seed = TRUE))
       tictoc::toc()
     }
-
+    
     # Generate summary table
     all_filtered_summary <- all_filtered_out_fun %>%
       dplyr::mutate(Proportion = round((reads.out / reads.in * 100), digits = 2)) %>%
       dplyr::rename("Primer-trimmed reads (pairs)" = "reads.in",
                 "Filtered reads (pairs)"       = "reads.out")
 
+    # View result
     all_filtered_summary
-
     ```
-
--   **Sync paired-end files.** Ensure R1 and R2 files remain synchronized after Cutadapt processing, discarding orphans.
-
-```{{r}}
-
-# Map Cutadapt output to 'repaired' file paths ----
-repair_files_per_primer <- cut_files_per_primer %>%
-  dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>% 
-  dplyr::filter(file.exists(`Read file`)) %>% 
-  tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer", "Primer", "Run"),
-                     names_from = "Stage",
-                     values_from = "Read file") %>% 
-  dplyr::mutate(FWD_R1_repaired = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "repaired"),
-                FWD_R2_repaired = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "repaired")) %>% 
-  tidyr::unite(col = "Unique_File_name_Primer",
-               sep = "--",
-               remove = FALSE,
-               Unique_File_name, Primer)
-
-# Execute repair in parallel ----
-# Uses the same filtering function but essentially just resynchronizes pairs
-tictoc::tic()
-
-all_filtered_out_fun_repaired2 <- 
-  furrr::future_pmap_dfr(list(repair_files_per_primer$Unique_File_name_Primer,
-                              repair_files_per_primer$FWD_R1_cutadapt,
-                              repair_files_per_primer$FWD_R2_cutadapt,
-                              repair_files_per_primer$FWD_R1_repaired,
-                              repair_files_per_primer$FWD_R2_repaired),
-                         .f = repairNfilt_with_DADA2, # Reusing the wrapper function
-                         .options = furrr::furrr_options(seed = TRUE))
-tictoc::toc()
-
-# Summarize repair results ----
-all_repaired <- all_filtered_out_fun_repaired2 %>% 
-  dplyr::rename("Unique_File_name_Primer" = "Unique_File_name",
-                "Primer detected reads"   = "reads.in",
-                "Repaired reads"          = "reads.out") %>% 
-  dplyr::mutate(Proportion = round((`Repaired reads` / 
-                                      `Primer detected reads` * 100), 
-                                   digits = 2)) %>% 
-  BiocGenerics::unique()
-
-all_repaired
-```
 
 ### Learn Error Rates and Infer ASVs
 
