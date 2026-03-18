@@ -40,22 +40,23 @@ editor_options:
 
     # Derived paths
     {
-      data_path <- file.path(prjct_path, "/data")
-      pipe_libs <- file.path(data_path, "/reads")
-      raw_libs <- file.path(pipe_libs, "/raw")
-      paired_libs <- file.path(pipe_libs, "/paired")
-      cutadapt_libs <- file.path(pipe_libs, "/cutadapt")
-      qual_path <- file.path(prjct_path, "/quality")
-      results_path <- file.path(prjct_path, "/results")
-      blast_path <- file.path(results_path, "/blast")
-      swarm_path <- file.path(results_path, "/swarm")
-      dmx_path <- file.path(pipe_libs, "/dmx")
-      dmx_all_path <- file.path(dmx_path, "/all_dmx")
-      dmx_combined_path <- file.path(dmx_path, "/all_combined")
+      env_path <- file.path(prjct_path, "environments")
+      data_path <- file.path(prjct_path, "data")
+      pipe_libs <- file.path(data_path, "reads")
+      raw_libs <- file.path(pipe_libs, "raw")
+      paired_libs <- file.path(pipe_libs, "paired")
+      cutadapt_libs <- file.path(pipe_libs, "cutadapt")
+      qual_path <- file.path(prjct_path, "quality")
+      results_path <- file.path(prjct_path, "results")
+      blast_path <- file.path(results_path, "blast")
+      swarm_path <- file.path(results_path, "swarm")
+      dmx_path <- file.path(pipe_libs, "dmx")
+      dmx_all_path <- file.path(dmx_path, "all_dmx")
+      dmx_combined_path <- file.path(dmx_path, "all_combined")
     }
 
     # Paths to be created
-    paths <- c(prjct_path, data_path, pipe_libs, raw_libs, 
+    paths <- c(prjct_path, env_path, data_path, pipe_libs, raw_libs, 
              paired_libs, cutadapt_libs, qual_path, results_path,
              blast_path, swarm_path, dmx_path, dmx_all_path, 
              dmx_combined_path)
@@ -225,13 +226,14 @@ After filling in the table, save it as .csv an place it on the data folder, insi
 -   **Defining all separate projects to analyze independently.** Extracts and lists all unique project names from the samples table.
 
     ```{r}
-    all_projects <- 
-      BiocGenerics::unique(primers_n_samples$Project) %>%
+    all_projects <- BiocGenerics::unique(primers_n_samples$Project) %>%
       stringr::str_split(pattern = ";", simplify = F) %>%
       base::unlist() %>%
       BiocGenerics::unique()
 
-    paste0("This analysis will by split into separate projects for:", paste0(c("\t", all_projects), collapse = "\n\t")) %>% 
+    paste0("This analysis will by split into separate projects for:", 
+           paste0(c("\t", all_projects), 
+                  collapse = "\n\t")) %>% 
     cat() %>% 
     message()
     ```
@@ -249,6 +251,14 @@ After filling in the table, save it as .csv an place it on the data folder, insi
 
     # Show sample names
     sample_levels
+    ```
+
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "1_setup_n_configuration-", Sys.Date()))
     ```
 
 ## 2. Raw Data Pre-processing
@@ -360,26 +370,29 @@ The raw sequencing reads are assessed for overall quality before any processing 
       dir.create(multiqc_path, recursive = TRUE, showWarnings = FALSE)
       
       # Filter reads belonging to this project
-      raw_path <- 
-        primers_n_samples$`Raw data path`[primers_n_samples$Project == PRJ] %>%
+      raw_path <- primers_n_samples$`Raw data path`[primers_n_samples$Project == PRJ] %>%
         unique()
       
-      project_reads <- 
-        read_files[stringr::str_detect(read_files, paste0(raw_path, collapse = "|"))]
+      project_reads <- read_files[stringr::str_detect(read_files, 
+                                                      paste0(raw_path, 
+                                                             collapse = "|"))]
       
       # 1. Run FastQC (requires GNU parallel + FastQC installed)
-            cmd_fastqc <- paste0(
-              "echo '", paste(project_reads, collapse = "\n"), "' | ",
-              "parallel fastqc {1} -t 20 -o ", fastqc_path)
+            cmd_fastqc <- paste0("echo '", 
+                                 paste(project_reads, collapse = "\n"), 
+                                 "' | ",
+                                 "parallel fastqc {1} -t 20 -o ", 
+                                 fastqc_path)
             system(cmd_fastqc)
             
       # 2. Run MultiQC
             report_name <- paste0(PRJ, "--sequencing_quality-MultiQC_report.html")
              
-            cmd_multiqc <- paste0(
-              "multiqc --interactive ",
-              fastqc_path, " --filename ",
-              file.path(multiqc_path, report_name))
+            cmd_multiqc <- paste0("multiqc --interactive ",
+                                  fastqc_path, 
+                                  " --filename ",
+                                  file.path(multiqc_path,
+                                            report_name))
             system(cmd_multiqc)
             
       # 3. Show MultQC report
@@ -815,6 +828,14 @@ The raw sequencing reads are assessed for overall quality before any processing 
     | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                       |
     | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual Cutadapt strategy described above \[\^2\]                                                 |
     | No primer detected in any orientation in any file                                            | Wrong primer pair selected; reads are already pre-trimmed; mismatches \> 1; incorrect file paths            | Verify primer sequences against the wet-lab protocol; confirm reads are not pre-trimmed (check FastQC/MultiQC report); increase `max.mismatch` to 2 as a test |
+
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "2_raw_data_pre_processing-", Sys.Date()))
+    ```
 
 ## 3. DADA2 ASV Workflow
 
@@ -1608,6 +1629,14 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
     # (Optional: Visualization code would follow here, using 'track_tbl' logic from original script)
     ```
 
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "3_DADA2_worflow-", Sys.Date()))
+    ```
+
 ## 4. Phyloseq Integration (ou Downstream Analysis?)
 
 ### Generate Sample Metadata
@@ -1768,6 +1797,14 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
     # ggsave(...) # Add your ggsave logic here as needed
     ```
 
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "4_phyloseq-", Sys.Date()))
+    ```
+
 ## 5. Taxonomic Assignment (BLASTn)
 
 This section performs taxonomic identification of ASVs using local BLAST databases.
@@ -1812,23 +1849,22 @@ This section performs taxonomic identification of ASVs using local BLAST databas
       
       message(paste("Processing BLAST chunk", i, "of", length(asv_chunks)))
       
-      chunk_res <- BLASTr::parallel_blast(
-    db_path = db_paths,
-    query_seqs = asv_chunks[[i]],
-    out_file = file.path(blast_path, paste0("blast_out_res_", i, ".csv")),
-    out_RDS  = file.path(blast_path, paste0("blast_out_res_", i, ".RDS")),
-    total_cores = 60,       # Adjust based on server capacity
-    num_threads = 2,
-    blast_type = "blastn",
-    perc_id = 80,
-    perc_qcov_hsp = 80,
-    num_alignments = 3
-      )
+      chunk_res <- BLASTr::parallel_blast(db_path = db_paths,
+                                          query_seqs = asv_chunks[[i]],
+                                          out_file = file.path(blast_path, paste0("blast_out_res_", i, ".csv")),
+                                          out_RDS  = file.path(blast_path, paste0("blast_out_res_", i, ".RDS")),
+                                          total_cores = 60,       # Adjust based on server capacity
+                                          num_threads = 2,
+                                          blast_type = "blastn",
+                                          perc_id = 80,
+                                          perc_qcov_hsp = 80,
+                                          num_alignments = 3
+                                          )
       
       blast_results_list[[i]] <- chunk_res
       
       # Optional: Save intermediate environment
-      # save.image(...) 
+      # base::save.image(paste0(env_path, "/", "5_BLASTr-", Sys.Date())) 
     }
 
     tictoc::toc()
@@ -1879,6 +1915,14 @@ This section performs taxonomic identification of ASVs using local BLAST databas
 
     # Check final TaxID distribution
     # table(blast_res_full$`1_staxid`, useNA = "always")
+    ```
+
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "5_Taxonomic_assignment-", Sys.Date()))
     ```
 
 ## 6. Taxonomy Curation & Assignment
@@ -2050,6 +2094,14 @@ This section refines the raw BLAST results, retrieves complete lineage informati
       dplyr::filter(Abundance > 0)
     ```
 
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "6_Taxonomic_curation-", Sys.Date()))
+    ```
+
 ## 7. Contamination Analysis
 
 This section identifies potential contaminant ASVs by comparing their abundance in samples against their abundance in the negative controls (PCR, extraction, filtration).
@@ -2151,6 +2203,14 @@ This section identifies potential contaminant ASVs by comparing their abundance 
     # table(all_ps_tbl_final$`Contamination status`)
     ```
 
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "7_Contamination_analysis-", Sys.Date()))
+    ```
+
 ## 8. Final Results Visualization
 
 This section generates plots to visualize the distribution of all identified ASVs, their taxonomic assignment, size, and relative abundance across samples.
@@ -2235,6 +2295,14 @@ This section generates plots to visualize the distribution of all identified ASV
     file = file.path(results_path, paste0(PRJ, "-ASV_length_by_sample--All_ASVs.html"))
       )
     }
+    ```
+
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "8_Final_visualization-", Sys.Date()))
     ```
 
 ## 9. Final Results Curation
@@ -2368,4 +2436,12 @@ This section refines the identification confidence levels and categorizes organi
       results_table_clean,
       path = file.path(results_path, paste0("Final_ASV_Table_", Sys.Date(), ".xlsx"))
     )
+    ```
+
+### Save the Environment!
+
+-   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "9_Final_results-", Sys.Date()))
     ```
