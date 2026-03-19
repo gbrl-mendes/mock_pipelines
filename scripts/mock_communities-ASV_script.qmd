@@ -135,7 +135,7 @@ editor_options:
                      Primer,
                      `Primer orientation`,
                      remove = FALSE) %>%
-        dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "__.*.$"),
+        dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "_FWD$|_REV$"),
                       `Parsed sequence` = iupac2seq(Sequence))
       
       base::names(primer_tbl$Sequence) <- primer_tbl$`Orientation name`
@@ -171,6 +171,10 @@ editor_options:
                      "Non-chimeric Concatenated" = "#458AFCFF",
                      "R1 + R2" = "#4145AAFF",
                      "Non-chimeric R1 + R2" = "#3A2C78FF")
+
+    # Plot identified primers
+    primer_colours <- c("white", "red", "yellow",
+                        "green", "dark green")
 
     # Plot identified ASVs
     colors <- c("#330000", "darkred", "red", 
@@ -557,8 +561,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
     # Apply all Orients to all primers and clean final table
     primers_all_orients <- purrr::map_dfr(primers_list, 
                                           allOrients) %>%
-      dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, 
-                                                            "__.*.$"))
+      dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "_FWD$|_REV$"))
     # Inspect primers orientations
     View(primers_all_orients)
     ```
@@ -598,14 +601,17 @@ The raw sequencing reads are assessed for overall quality before any processing 
     cores_to_use <- future::availableCores() - 2
     future::plan(future::multisession(workers = cores_to_use))
 
-    message("Searching primers across ", length(reads_seqs), " files using ",
-            cores_to_use, " cores. This may take a few minutes...")
-
     # Count primer occurrences across all files x all primer orientations (parallel)
-    primers_in_Nreads <- furrr::future_map_dfr(reads_seqs, 
-                                               .f = multi_primerHits,
-                                               primers = primers_seqs,
-                                               .options = furrr::furrr_options(seed = NULL))
+    {
+      message("Searching primers across ", length(reads_seqs), " files using ",
+              cores_to_use, " cores. This may take a few minutes...")
+      
+      primers_in_Nreads <- furrr::future_map_dfr(reads_seqs,
+                                                 .f = multi_primerHits,
+                                                 primers = primers_seqs,
+                                                 .options = 
+                                                   furrr::furrr_options(seed = NULL))
+    }
 
     # Join with sample metadata and calculate total reads per file
     primers_in_Nreads <- 
@@ -711,9 +717,8 @@ The raw sequencing reads are assessed for overall quality before any processing 
                            hjust = 0, 
                            size = 1) +
         # Color scales
-        ggplot2::scale_fill_gradientn(name = "Proportion of reads\n     with primer (%)",
-                                      colours = c("white", "red", "yellow", 
-                                                  "green", "dark green"),
+        ggplot2::scale_fill_gradientn(name = "Proportion of reads\n with primer (%)",
+                                      colours = primer_colours,
                                       values = c(0, 1),
                                       na.value = "white") +
         # Axes and Guides
@@ -795,7 +800,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
 
     All other orientation/read combinations should be near zero. *Typical examples:* 16S V3–V4 (\~460 bp) with 2×250 bp reads; 12S V5 with 2×150 bp reads when the amplicon exceeds read length.
 
-    **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:\[\^1\]
+    **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:
 
     | Primer  | R1                                       | R2                                       |
     |:-----------------|:--------------------------|:--------------------------|
@@ -815,7 +820,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
 
     -   **`vsearch --orient`**: Reorients each read relative to a reference database before any further processing, producing a consistently stranded output. Can be applied to R1 and R2 independently before they enter the pipeline.
 
-    -   **`dada2::removePrimers(..., orient = TRUE)`**: When using DADA2's own primer removal function, the `orient` parameter detects read pairs where the FWD primer is found at the start of R2 instead of R1, swaps the pair, and unifies orientation — no external tool required.\[\^3\]
+    -   **`dada2::removePrimers(..., orient = TRUE)`**: When using DADA2's own primer removal function, the `orient` parameter detects read pairs where the FWD primer is found at the start of R2 instead of R1, swaps the pair, and unifies orientation — no external tool required.
 
     -   **Dual Cutadapt strategy (recommended for maximum read retention)**: Run Cutadapt twice — once with FWD anchored on R1 and REV on R2 (`standard` pairs), and once with REV anchored on R1 and FWD on R2 (`flipped` pairs), using `--discard-untrimmed` on each run to keep only correctly matched pairs. Run the full DADA2 pipeline independently on each subset, then merge the two resulting ASV tables, reverse-complementing all sequences from the `flipped` run to unify orientation before merging. This is the approach recommended by B. Callahan for mixed-orientation data.
 
@@ -841,7 +846,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
 
 This section executes the DADA2 core workflow to infer Amplicon Sequence Variants (ASVs) from the pre-processed reads. The workflow is organized into two phases:
 
-1.  **Read preparation**: ambiguous bases are removed, primers are physically excised with Cutadapt, their removal is verified, and a final quality filter is applied.
+1.  **Read preparation**: ambiguous bases are removed, primers are excised with Cutadapt, their removal is verified, and a final quality filter is applied.
 
 2.  **DADA2 inference steps**: a run-specific error model is learned, reads are denoised and merged, and chimeric sequences are removed, resulting in a high-resolution ASV table analogous to a traditional OTU table.
 
@@ -883,6 +888,8 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
       # Check if input files exist
       if (file.exists(FWD_R1_in) && file.exists(FWD_R2_in)) {
         
+        total_files = length(FWD_R1_in) + length(FWD_R2_in)
+        
         # Run filterAndTrim with ONLY maxN = 0 to prepare for Cutadapt
         sample_filtered_out <- dada2::filterAndTrim(fwd = FWD_R1_in,
                                                     filt = FWD_R1_out,
@@ -909,11 +916,18 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
     ```{r}
     # Setup parallel processing
     cores_to_use <- future::availableCores() - 2 
-    future::plan(future::multisession(workers = cores_to_be_used))
+    future::plan(future::multisession(workers = cores_to_use))
+
+    # How much files 
+    files_to_filt <- c(primer_paired_files$FWD_R1,
+                       primer_paired_files$FWD_R2)
 
     # Run pre-filtering in parallel
     {
       tictoc::tic()
+      
+      message("Removing ambigous bases across ", length(files_to_filt), " files using ", 
+              cores_to_use, " cores. This may take a few minutes...")
       
       all_filtered_out_fun <-
         furrr::future_pmap_dfr(list(primer_paired_files$Unique_File_name,
@@ -980,7 +994,8 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
 
     ```{r}
     # Identify unique primer sets to process
-    primer_sets <- primers_all_orients$`Primer pair` %>% 
+    primer_sets <- primers_all_orients$`Primer pair` %>%
+      stringr::str_remove_all("_FWD$|_REV$") %>%
       BiocGenerics::unique()
 
     # Initialize list to store flags per primer set
@@ -990,27 +1005,23 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
     for (PRIMER_SET in primer_sets) {
       
       # Forward primer (for R1 5')
-      fwd_seq <- primers_all_orients$Sequence[
-        grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_FWD_Forward"), 
-         primers_all_orients$`Orientation name`)]
+      fwd_seq <- primers_all_orients$Sequence[grep(paste0(PRIMER_SET, "_FWD_Forward"),
+                                                   primers_all_orients$`Orientation name`)]
       
       # Reverse complement of Forward primer (for R2 3' read-through)
-      fwd_rc_seq <- primers_all_orients$Sequence[
-    grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_FWD_RevComp"), 
-         primers_all_orients$`Orientation name`)]
+      fwd_rc_seq <- primers_all_orients$Sequence[grep(paste0(PRIMER_SET, "_FWD_RevComp"), 
+                                                      primers_all_orients$`Orientation name`)]
       
       # Reverse primer (for R2 5')
-      rev_seq <- primers_all_orients$Sequence[
-    grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_REV_Forward"), 
-         primers_all_orients$`Orientation name`)]
+      rev_seq <- primers_all_orients$Sequence[grep(paste0(PRIMER_SET, "_REV_Forward"),
+                                                   primers_all_orients$`Orientation name`)]
       
       # Reverse complement of Reverse primer (for R1 3' read-through)
-      rev_rc_seq <- primers_all_orients$Sequence[
-    grep(paste0(str_extract(PRIMER_SET, "^[^_]+"), "_REV_RevComp"), 
-         primers_all_orients$`Orientation name`)]
+      rev_rc_seq <- primers_all_orients$Sequence[grep(paste0(PRIMER_SET,  "_REV_RevComp"),
+                                                      primers_all_orients$`Orientation name`)]
       
       # Store sequences for use in flag construction
-      cutadapt_flags[[PRIMER_SET]] <- list(fwd_seq    = fwd_seq,
+      cutadapt_flags[[PRIMER_SET]] <- list(fwd_seq = fwd_seq,
                                            fwd_rc_seq = fwd_rc_seq,
                                            rev_seq    = rev_seq,
                                            rev_rc_seq = rev_rc_seq)
@@ -1033,12 +1044,12 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
           seqs <- cutadapt_flags[[PRIMER_SET]]
           
           # -g: Anchor FWD to start of R1; -a: Remove REV_RC from end of R1
-          R1_flags <- paste0("-g", seqs$fwd_seq, 
-                             "-a", seqs$rev_rc_seq)
+          R1_flags <- c("-g", seqs$fwd_seq,
+                        "-a", seqs$rev_rc_seq)
           
           # -G: Anchor REV to start of R2; -A: Remove FWD_RC from end of R2
-          R2_flags <- paste0("-G", seqs$rev_seq, 
-                             "-A", seqs$fwd_rc_seq)
+          R2_flags <- c("-G", seqs$rev_seq,
+                        "-A", seqs$fwd_rc_seq)
           
           # Store back for use in the execution step
           cutadapt_flags[[PRIMER_SET]]$R1_flags <- R1_flags
@@ -1052,20 +1063,20 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
     for (PRIMER_SET in primer_sets) {
       
       # Filter samples belonging to this primer set and pivot to wide format
-      PRIMER_SET_files <- cut_files_per_primer %>% 
-        dplyr::filter(stringr::str_detect(Primer, str_extract(PRIMER_SET, "^[^_]+"))) %>%
+      PRIMER_SET_files <- cut_files_per_primer %>%
+        dplyr::filter(stringr::str_detect(Primer, PRIMER_SET)) %>%
         tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer"),
                            names_from  = "Stage",
                            values_from = "Read file")
 
       # Validate input file existence
-      valid_indices <- file.exists(PRIMER_SET_files$FWD_R1_paired) & 
-                   file.exists(PRIMER_SET_files$FWD_R2_paired)
+      valid_indices <- file.exists(PRIMER_SET_files$FWD_R1_paired) &
+        file.exists(PRIMER_SET_files$FWD_R2_paired)
       
       # Define input/output vectors restricted to valid pairs
-      cutadapt_flags[[PRIMER_SET]]$fnFs_in  <- PRIMER_SET_files$FWD_R1_paired[valid_indices]
+      cutadapt_flags[[PRIMER_SET]]$fnFs_in <- PRIMER_SET_files$FWD_R1_paired[valid_indices]
       
-      cutadapt_flags[[PRIMER_SET]]$fnRs_in  <- PRIMER_SET_files$FWD_R2_paired[valid_indices]
+      cutadapt_flags[[PRIMER_SET]]$fnRs_in <- PRIMER_SET_files$FWD_R2_paired[valid_indices]
       
       cutadapt_flags[[PRIMER_SET]]$fnFs_out <- PRIMER_SET_files$FWD_R1_cutadapt[valid_indices]
       
@@ -1074,8 +1085,6 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
     ```
 
 -   **Execute Cutadapt.** Iterate over each valid input file pair and invoke the Cutadapt **`system2`** command. **Key parameters to configure for your dataset**:
-
-    -   **`-e`**: Maximum error rate for adapter matching. Use lower values (e.g., 0.05) for primers without degenerate bases; values around 0.1 (10%) are typical when IUPAC ambiguity codes are present.
 
     -   **`-j`**: Number of CPU threads. Set to `0` to let Cutadapt auto-detect all available cores.
 
@@ -1103,13 +1112,12 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
           system2(command = cutadapt, 
                   args = c(flags$R1_flags, 
                            flags$R2_flags,
-                           "-e", "0.1",
-                           "-j", "70",
-                           "-n", "5",
+                           "-j", "0",
+                           "-n", "2",
                            "--minimum-length", "30",
                            "--discard-untrimmed",
                            "--match-read-wildcards",
-                           # "--pair-filter = both",
+                           # "--pair-filter", "both",
                            "-o", fnFs_out[i],
                            "-p", fnRs_out[i], fnFs_in[i], fnRs_in[i]
                   ))
@@ -1124,201 +1132,193 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
 
 After running Cutadapt, it is essential to confirm that primer sequences were effectively removed from all reads before proceeding to quality filtering and ASV inference. Any residual primer signal in the trimmed files indicates misconfigured adapter flags, unexpected primer orientations, or issues in the library preparation. This section reuses the primer‑detection logic to count residual primer hits in the Cutadapt outputs and summarizes how clean each sample is.
 
--   **Collect Cutadapt output files.** Assemble a table of trimmed FASTQ files (R1/R2) per sample and primer set.
+-   **Collect Cutadapt output files.** Builds a long-format table of trimmed FASTQ paths (R1 and R2) per sample and primer set.
 
     ```{r}
     # Restrict to Cutadapt outputs (R1/R2 trimmed files that actually exist)
-    cutadapt_check_files <- cut_files_per_primer %>%
-      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
+    cutadapt_check_seqs_tbl <- cut_files_per_primer %>%
+      dplyr::filter(stringr::str_detect(Stage, "cutadapt")) %>%
       dplyr::filter(file.exists(`Read file`)) %>%
-      tidyr::pivot_wider(id_cols = c("Unique_File_name", 
-                                     "Unique_File_name_Primer",
-                                     "Primer", 
-                                     "Run"),
-                     names_from  = "Stage",
-                     values_from = "Read file")
-
-    # View result
-    cutadapt_check_files
+      dplyr::select(`Read file`, Unique_File_name = Unique_File_name_Primer,
+                    Stage, Project, Run, Primer)
+    #Show table
+    View(cutadapt_check_seqs_tbl)
     ```
 
--   **Prepare primer pairs table.** Build a compact reference table with one row per primer pair, containing the forward and reverse sequences in their biologically relevant orientations.
+-   **Per-file primer hits.** Counts residual primer occurrences in the Cutadapt-trimmed files using the same multi_primerHits() function and primers_all_orients table from the raw-read detection step. All four orientations — Forward, Complement, Reverse, and RevComp — are searched simultaneously across every R1 and R2 file in parallel. The resulting table is joined with sample metadata and annotated with total read counts per file to allow proportional comparison across samples.
 
     ```{r}
-    primer_pairs_tbl <- primers_all_orients %>% 
-      dplyr::filter(`Primer orientation` == "Forward") %>%
-      dplyr::select(`Primer pair`, Primer, Sequence) %>%
-      tidyr::pivot_wider(id_cols = `Primer pair`,
-                         names_from = Primer,
-                         values_from = Sequence,
-                         names_sep = "_")
-    # View result
-    primer_pairs_tbl
-    ```
+    # Build named vector of Cutadapt FASTQ paths (names = sample identifiers)
+    cutadapt_reads_seqs <- cutadapt_check_seqs_tbl$`Read file`
+    names(cutadapt_reads_seqs) <- cutadapt_check_seqs_tbl$Unique_File_name
 
--   **Define helper function to check one sample.** For a given sample and its R1/R2 Cutadapt files, count residual hits of each primer pair.
+    # Extract all primer orientations as named vector (same object used pre-Cutadapt)
+    primers_seqs <- primers_all_orients %>%
+      dplyr::pull(Sequence, name = `Orientation name`)
 
-    ```{r}
-    check_one_sample_cutadapt <- function(sample_name,
-                                          R1_file,
-                                          R2_file,
-                                          primer_pairs_tbl) {
-      
-      purrr::map_dfr(primer_pairs_tbl$`Primer pair`, 
-                     function(PRIMER_SET) {
-                       
-                       fwd_seq <- primer_pairs_tbl %>%
-                         dplyr::filter(`Primer pair` == PRIMER_SET) %>%
-                         dplyr::pull(dplyr::ends_with("FWD")) %>%
-                         .[[1]]
-                       
-                       rev_seq <- primer_pairs_tbl %>%
-                         dplyr::filter(`Primer pair` == PRIMER_SET) %>%
-                         dplyr::pull(dplyr::ends_with("REV")) %>%
-                         .[[1]]
-                       
-                       rbind(primerHits(primer = fwd_seq, file_name = R1_file),
-                             primerHits(primer = rev_seq, file_name = R2_file)) %>%
-                         dplyr::mutate(Sample = sample_name,
-                                       `Primer pair` = PRIMER_SET,
-                                       File = c("R1", "R2"))
-                       }
-      )
-    }
-    ```
+    # Set up parallel processing (all cores minus 2)
+    cores_to_use <- future::availableCores() - 2
+    future::plan(future::multisession(workers = cores_to_use))
 
--   **Count residual primer hits across all samples** Apply the helper function to every sample with Cutadapt outputs.
+    # Count residual primer occurrences across all files × all primer orientations (parallel)
+    {
+      message("Searching residual primers across ", length(cutadapt_reads_seqs),
+              " post-Cutadapt files using ", cores_to_use, " cores. ",
+              "This may take a few minutes...")
 
-    ```{r}
-    primers_in_cutadapt_reads <- 
-      purrr::pmap_dfr(list(cutadapt_check_files$Unique_File_name_Primer,
-                           cutadapt_check_files$FWD_R1_cutadapt,
-                           cutadapt_check_files$FWD_R2_cutadapt),
-                      check_one_sample_cutadapt,
-                      primer_pairs_tbl = primer_pairs_tbl)
+      primers_in_cutadapt_reads <- furrr::future_map_dfr(cutadapt_reads_seqs,
+                                                         .f      = multi_primerHits,
+                                                         primers = primers_seqs,
+                                                         .options = furrr::furrr_options(seed = NULL))
+      }
 
-    # View result
-    primers_in_cutadapt_reads
-    ```
-
--   **Summarize and reshape for inspection.** Join metadata, compute total reads per file, and convert to long format to inspect which primer pairs still leave residual signal.
-
-    ```{r}
-    # Add metadata and total reads per file
+    # Join with sample metadata and calculate total reads per file
     primers_in_cutadapt_reads <- primers_in_cutadapt_reads %>%
-      dplyr::left_join(cutadapt_check_files, 
-                       by = c("Sample" = "Unique_File_name_Primer")) %>%
-      dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = FWD_R1_cutadapt)[, 1] +
-                      ShortRead::countFastq(dirPath = FWD_R2_cutadapt)[, 1])
+      dplyr::left_join(cutadapt_check_seqs_tbl, by = "Read file") %>%
+      dplyr::mutate(Read = dplyr::if_else(stringr::str_detect(Stage, "R1"), "R1", "R2")) %>%
+      tidyr::unite(col    = "Unique_File_name_Read",
+                   Unique_File_name,
+                   Read,
+                   sep    = " ",
+                   remove = FALSE) %>%
+      dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = `Read file`)[, 1])
 
-    # Reshape to long format and filter non‑zero hits
+    message("✓ Post-Cutadapt primer search complete. ",
+            "Results in `primers_in_cutadapt_reads`:\n",
+            "  ", length(unique(primers_in_cutadapt_reads$Unique_File_name)),
+            " samples × ", length(primers_seqs), " primer orientations across ",
+            length(cutadapt_reads_seqs), " files.")
+    ```
+
+-   **Prepare data.** Transforms the post-Cutadapt primer hits table into a long format suitable for visualization with `ggplot2`. Columns corresponding to Complement and Reverse orientations are dropped before reshaping. Rows with zero counts are removed, so that the resulting table contains only genuine residual primer signals.
+
+    ```{r}
+    # Convert to long format, retaining only Forward and RevComp orientations
     primers_in_cutadapt_reads_long <- primers_in_cutadapt_reads %>%
-      dplyr::filter(File %in% c("R1", "R2")) %>%
-      dplyr::mutate(Sample = factor(Sample, levels = Unique_File_name_Primer),
-                    Pct_reads = (..density.. * 100))
+      dplyr::select(!dplyr::ends_with(c("Complement", "Reverse"))) %>%
+      tidyr::gather(key = "Sequences", value = "Count",
+                    dplyr::ends_with("Forward"),
+                    dplyr::ends_with("RevComp")) %>%
+      dplyr::mutate(Sequences = as.factor(Sequences),
+                    Unique_File_name = factor(Unique_File_name, 
+                                              levels = sample_levels)) %>%
+      dplyr::select(-c(`Read file`, Stage)) %>%
+      # Remove columns that are entirely NA
+      dplyr::select(where(function(x) any(!is.na(x)))) %>%
+      # Keep only rows with residual primer signal
+      dplyr::filter(Count != 0)
 
-    # View result
-    primers_in_cutadapt_reads_long
+    # Create ordered levels for the y-axis (File × Read direction)
+    Unique_File_name_Read_levels <- primers_in_cutadapt_reads_long %>%
+      dplyr::pull(Unique_File_name_Read) %>%
+      base::unique()
     ```
 
 -   **Generate diagnostic plot.** If residual primers are detected, visualize their distribution across samples.
 
     ```{r}
-    # Only generate plots if residual primers found
+    # Isolate non-zero residual hits
     residual_hits <- primers_in_cutadapt_reads_long %>%
-      dplyr::filter(Count > 0)
+    residual_hits <- primers_in_Nreads_long %>%
+      dplyr::filter(Count != 0)
 
     if (nrow(residual_hits) > 0) {
-      
       for (PRJ in all_projects) {
-        
         options(scipen = 10000)
-        
-        # 1. Filter and prepare data for the current project
+
+        # 1. Filter and prepare data ONCE for the current project
         # This avoids filtering the large dataset multiple times inside the loop
-        project_data <- residual_hits  %>%
+        project_data <- residual_hits %>%
           dplyr::filter(Project == PRJ) %>%
-          dplyr::mutate( 
-            
+          dplyr::mutate(
             # Pre-format labels and calculate percentages to keep ggplot clean
-            Sequences_lbl = stringr::str_replace_all(Sequences, "__|_", "\\n"),
-            Primer_lbl = stringr::str_replace_all(Primer, ";", "\\n"),
-            Pct_Reads = (Count / `Total reads` * 100))
-        
+            Sequences_lbl = stringr::str_replace_all(Sequences, "_", "\n"),
+            Primer_lbl = stringr::str_replace_all(Primer,    "_", "\n"),
+            PctReads = Count / `Total reads` * 100)
+
+        if (nrow(project_data) == 0) next
+
         # 2. Calculate dynamic dimensions based on actual data
-        n_samples <- length(unique(project_data$Sample))
-        n_primers <- length(unique(project_data$`Primer pair`))
-        
-        # 3. Create the plot 
-        primers_tile_residual <- project_data %>%
-          ggplot2::ggplot(aes(y = Sample)) +
+        nsamples <- length(unique(project_data$Unique_File_name_Read))
+        nprimers <- length(unique(project_data$Primer))
+
+        # 3. Create the plot object
+        primers_tile_residual <-
+          project_data %>%
+          ggplot2::ggplot(ggplot2::aes(y = Unique_File_name_Read)) +
+
           # Bar layer
-          ggplot2::geom_bar(aes(x = `Total reads`,
-                                fill = Pct_Reads,
-                                color = `Primer pair`,
-                                group = Sequences),
+          ggplot2::geom_bar(ggplot2::aes(x = `Total reads`,
+                                         fill = PctReads,
+                                         color = Primer,
+                                         group = Sequences),
                             stat = "identity",
                             position = "dodge",
                             linewidth = 0.05,
                             linetype = 2,
                             alpha = 0.5) +
+
           # Text labels for counts
-          ggplot2::geom_text(aes(x = `Total reads`,
-                                 label = Count),
+          ggplot2::geom_text(ggplot2::aes(x = `Total reads`, label = Count),
                              hjust = 0,
-                             size = 1) +
+                             size  = 1) +
+
           # Color scales
-          ggplot2::scale_fill_gradientn(
-            name    = "Residual primer\nproportion (%)",
-            colours = c("white", "red", "yellow", "green", "dark green"),
-            values  = c(0, 1),
-            na.value = "white") +
+          ggplot2::scale_fill_gradientn(name = "% reads with\nresidual primer",
+                                        colours = primer_colours,
+                                        values = c(0, 1),
+                                        na.value = "white") +
+
           # Axes and Guides
           ggplot2::scale_y_discrete(limits = rev) +
-          ggplot2::scale_x_log10(
-            breaks = c(10, 100, 1000, 10000, 100000),
-            expand = expansion(mult = c(0, 0.2))) +
-          ggplot2::guides(color = guide_legend(
-            override.aes = list(fill = "white", size = 10))) +
-          
+          ggplot2::scale_x_log10(breaks = c(10, 100, 1000, 10000, 100000),
+                                 expand = ggplot2::expansion(mult = c(0, 0.2))) +
+          ggplot2::scale_alpha(guide = "none") +
+          ggplot2::guides(color = guide_legend(override.aes = list(fill = "white",
+                                                                   size = 10))) +
+
           # Theme adjustments
           ggplot2::theme_light(base_line_size = 0.025, base_size = 6) +
-          ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1),
-                         strip.text.y = element_text(size = 10),
-                         plot.title = element_text(size = 10),
-                         plot.subtitle = element_text(size = 6),
-                         legend.text = element_text(size = 5),
-                         legend.title = element_text(size = 7)) +
-          
+          ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+                         strip.text.y = ggplot2::element_text(size = 10),
+                         plot.title = ggplot2::element_text(size = 10),
+                         plot.subtitle = ggplot2::element_text(size = 6),
+                         legend.text = ggplot2::element_text(size = 5),
+                         legend.title = ggplot2::element_text(size = 7)) +
+
           # Dynamic horizontal lines based on actual sample count
-          ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2),
+          ggplot2::geom_hline(yintercept = seq(0.5, nsamples + 0.5, 2),
                               color = "darkgrey") +
-          
+
           # Titles and Facets
           ggplot2::labs(title = paste0(PRJ, " — Post-Cutadapt Residual Primers"),
-                        subtitle = "Non-zero counts indicate incomplete primer removal.\nCheck Cutadapt flags and primer orientations.",
-                        x = "Primers",
-                        y = "Sample") +
-          ggplot2::facet_grid(rows = vars(Primer_lbl),
-                              cols = vars(Sequences_lbl),
+                        subtitle = paste0("Non-zero counts indicate incomplete primer removal. ","Forward and RevComp orientations only (max.mismatch = 1)."),
+                        x = "Primer orientation",
+                        y = "Sample (file × read direction)") +
+          ggplot2::facet_grid(rows = ggplot2::vars(Primer_lbl),
+                              cols = ggplot2::vars(Sequences_lbl),
                               scales = "free",
                               space = "free")
-        
         # 4. Save the plot
-        ggplot2::ggsave(
-          file = paste0(results_path, "/", PRJ, "-residual_primers_post_cutadapt.pdf"),
-          plot = primers_tile_residual,
-          device= "pdf",
-          width = 10 + (n_primers * 10),
-          height = (n_samples * 0.3) + 3,
-          units = "cm",
-          limitsize = FALSE,
-          dpi = 600
-          )
-        }
-      } else {
-        message("Primer removal successful: no residual primer hits detected across all samples.")
-        }
+        ggplot2::ggsave(file = paste0(results_path, "/", PRJ,
+                             "-residual_primers_post_cutadapt.pdf"),
+                        plot = primers_tile_residual,
+                        device = "pdf",
+                        width = 10 + nprimers * 10,
+                        height = nsamples * 0.3 + 3,
+                        units = "cm",
+                        limitsize = FALSE,
+                        dpi = 600)
+
+        browseURL(paste0(results_path, "/", PRJ,
+                         "-residual_primers_post_cutadapt.pdf"))
+      }
+
+    } else {
+      message("✓ Primer removal successful — no residual primer hits detected ",
+              "across all ", length(cutadapt_reads_seqs),
+              " post-Cutadapt files.")
+    }
     ```
 
 #### Quality checking post Cutadapt
