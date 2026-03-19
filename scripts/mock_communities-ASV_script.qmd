@@ -48,6 +48,7 @@ editor_options:
       cutadapt_libs <- file.path(pipe_libs, "cutadapt")
       qual_path <- file.path(prjct_path, "quality")
       results_path <- file.path(prjct_path, "results")
+      figs_path <- file.path(prjct_path, "figures")
       blast_path <- file.path(results_path, "blast")
       swarm_path <- file.path(results_path, "swarm")
       dmx_path <- file.path(pipe_libs, "dmx")
@@ -56,10 +57,10 @@ editor_options:
     }
 
     # Paths to be created
-    paths <- c(prjct_path, env_path, data_path, pipe_libs, raw_libs, 
-             paired_libs, cutadapt_libs, qual_path, results_path,
-             blast_path, swarm_path, dmx_path, dmx_all_path, 
-             dmx_combined_path)
+    paths <- c(prjct_path, env_path, data_path, pipe_libs, raw_libs,
+               paired_libs, cutadapt_libs, qual_path, results_path,
+               figs_path, blast_path, swarm_path, dmx_path, dmx_all_path,
+               dmx_combined_path)
 
     for (dir in paths) {
       if (dir.exists(dir)) {
@@ -1698,49 +1699,176 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
 -   **Compile statistics.** Gather read counts from every processing step (Raw/Cutadapt -> Filtered -> Denoised -> Merged -> Non-chimeric) to assess pipeline quality and detect samples where massive data loss occurred.
 
     ```{r}
-    # Helper function to extract counts from DADA objects
-    getN <- function(x) { sum(dada2::getUniques(x)) }
-
-    # Extract counts for all DADA2 steps into named tibbles
-    tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN), 
-                                       name = "Unique_File_name_Primer", 
-                                       value = "Denoised (R1)")
-    
-    tbl_Denoised_R2 <- tibble::enframe(sapply(all_dadaRs, getN), 
-                                       name = "Unique_File_name_Primer", 
-                                       value = "Denoised (R2)")
-    
-    tbl_Merged <- tibble::enframe(rowSums(mergers_seqtab), 
-                                       name = "Unique_File_name_Primer", 
-                                  value = "Merged")
-    
-    tbl_NonChim <- tibble::enframe(rowSums(mergers_seqtab_nochim), 
-                                       name = "Unique_File_name_Primer", 
-                                   value = "Non-chimeric Merged")
-
-    # Combine all tracking metrics into a single cohesive table
-    # It builds upon the 'all_filtered_summary' we generated during the filterAndTrim step
-    all_track <- list(all_filtered_summary, # Contains "Primer-trimmed reads (pairs)" and "Filtered reads (pairs)"
-                      tbl_Denoised_R1,
-                      tbl_Denoised_R2,
-                      tbl_Merged,
-                      tbl_NonChim) %>%
+    {
+      message("Compiling read retention statistics across all pipeline stages...")
+      
+      # 1. Helper function to extract counts from DADA objects
+      getN <- function(x) { base::sum(dada2::getUniques(x)) }
+      
+      # 2. Extract RAW read counts
+      # We only count R1 because paired-end files have identical line counts
+      raw_reads_paths <- sample_idx_tbl %>%
+        dplyr::filter(Stage == "FWD_R1") %>%
+        dplyr::pull(`Read file`, name = Unique_File_name)
+      
+      tbl_Raw <- tibble::enframe(sapply(raw_reads_paths, function(x) ShortRead::countFastq(x)[,1]),
+                                 name = "Unique_File_name",
+                                 value = "Raw reads (pairs)")
+      
+      # 3. Extract Cutadapt read counts and build composite key
+      # cut_files_per_primer contains Unique_File_name, we use unite() to match the DADA2 outputs
+      tbl_Cutadapt <- cut_files_per_primer %>%
+        dplyr::filter(Stage == "FWD_R1_cutadapt") %>%
+        dplyr::mutate(`Primer detected reads` = sapply(`Read file`, function(x) ShortRead::countFastq(x)[,1])) %>%
+        tidyr::unite(col = "Unique_File_name_Primer",
+                     Unique_File_name, Primer,
+                     sep = "--",
+                     remove = FALSE) %>%
+        dplyr::select(Unique_File_name_Primer, Unique_File_name, Primer, `Primer detected reads`)
+      
+      # 4. Extract DADA2 sequence steps
+      tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN),
+                                         name = "Unique_File_name_Primer", 
+                                         value = "Denoised (R1)")
+      
+      tbl_Denoised_R2 <- tibble::enframe(sapply(all_dadaRs, getN),
+                                         name = "Unique_File_name_Primer", 
+                                         value = "Denoised (R2)")
+      
+      tbl_Merged      <- tibble::enframe(rowSums(mergers_seqtab),
+                                         name = "Unique_File_name_Primer", 
+                                         value = "Merged")
+      
+      tbl_NonChim     <- tibble::enframe(rowSums(mergers_seqtab_nochim),
+                                         name = "Unique_File_name_Primer", 
+                                         value = "Non-chimeric Merged")
+      
+      # 5. Combine all tracking metrics into a single cohesive table
+      # We start with tbl_Cutadapt because it natively holds the mapped Unique_File_name and Primer info
+      all_track <- list(tbl_Cutadapt,
+                        all_filtered_summary %>% dplyr::select(Unique_File_name_Primer, `Filtered reads (pairs)`),
+                        tbl_Denoised_R1,
+                        tbl_Denoised_R2,
+                        tbl_Merged,
+                        tbl_NonChim) %>%
       purrr::reduce(dplyr::left_join, by = "Unique_File_name_Primer") %>%
-      # Separate the composite name back to map against metadata
-      tidyr::separate(Unique_File_name_Primer, 
-                      into = c("Unique_File_name", "Primer"), 
-                      sep = "--", 
-                      remove = FALSE) %>%
+      # Join with RAW reads via Unique_File_name
+      dplyr::left_join(tbl_Raw, by = "Unique_File_name") %>%
+      # Join with original configuration metadata
       dplyr::left_join(primers_n_samples, by = c("Unique_File_name", "Primer")) %>%
-      # Reorder columns logically
-      dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer)
-
-    # Show preview
-    all_track %>% 
+      # Reorder columns logically to match the sequence of events
+      dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer) %>%
+      dplyr::relocate(`Raw reads (pairs)`, .before = `Primer detected reads`)
+      
+      # Show preview
+      all_track %>%
       dplyr::select(Unique_File_name_Primer, 
+                    `Raw reads (pairs)`, 
+                    `Primer detected reads`,
                     `Filtered reads (pairs)`, 
+                    `Denoised (R1)`,
+                    `Denoised (R2)`,
                     `Non-chimeric Merged`) %>%
       View()
+    }
+    ```
+
+-   **Save metrics to Excel.** Export the aggregated tracking table to individual Excel spreadsheets for project-specific reporting and external auditing.
+
+    ```{r}
+    {
+      for (PRJ in all_projects) {
+        
+        prj_track <- all_track %>%
+          dplyr::filter(Project == PRJ)
+        
+        output_excel <- file.path(results_path,
+                                  paste0(PRJ,
+                                         "-reads_and_seqs_counts-",
+                                         Sys.Date(),
+                                         ".xlsx"))
+        
+        writexl::write_xlsx(prj_track, path = output_excel)
+        }
+    
+      message("✓ Saved read tracking metrics to datasheet file.")
+    }
+    ```
+
+-   **Plot Read Retention.** Transforms the tabular data into a long format to generate faceted bar plots. These visual summaries quickly highlight whether data loss occurred uniformly across stages or if specific samples failed abruptly at a particular step. Plots are saved automatically as PDFs.
+
+    ```{r}
+    # Transform tibble to long format for ggplot
+    track_tbl <- all_track %>%
+      tidyr::gather(key = "Stage", 
+                    value = "Read counts",
+                    "Raw reads (pairs)",
+                    "Primer detected reads",
+                    "Filtered reads (pairs)", 
+                    "Denoised (R1)",
+                    "Denoised (R2)",
+                    "Merged",
+                    "Non-chimeric Merged") %>%
+      dplyr::mutate(Stage = factor(Stage, levels = c("Raw reads (pairs)",
+                                                     "Primer detected reads",
+                                                     "Filtered reads (pairs)", 
+                                                     "Denoised (R1)",
+                                                     "Denoised (R2)",
+                                                     "Merged",
+                                                     "Non-chimeric Merged"))) 
+      
+    options(scipen = 22)
+    
+    # Define a clean Viridis palette explicitly mapping to our 7 stages
+    stage_colors <- viridis::turbo(n = 7, direction = -1)
+
+    for (PRJ in all_projects) {
+
+      project_name <- stringr::str_replace_all(PRJ, " ", "_")
+      
+      # Filter for current project
+      prj_data <- track_tbl %>% 
+        dplyr::filter(Project == PRJ) %>%
+        dplyr::arrange(Unique_File_name)
+
+      N_samples <- length(unique(prj_data$Unique_File_name))
+
+      track_plot <- ggplot2::ggplot(prj_data, aes(y = Stage,
+                                                  x = `Read counts`, 
+                                                  fill = Stage,
+                                                  group = Unique_File_name)) +
+        ggplot2::geom_bar(stat = "identity", alpha = 0.85) + 
+        ggplot2::scale_fill_manual(values = stage_colors) +
+        ggplot2::labs(title = paste0("Project: ", PRJ),
+                      subtitle = "Number of sequences per library across data processing stages",
+                      x = "Number of sequences",
+                      y = "Data processing stage") +
+        ggplot2::facet_wrap(Unique_File_name ~ Primer, ncol = 8) +
+        ggplot2::theme_bw(base_size = 8) +
+        ggplot2::theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, face = "bold"),
+                       legend.position = "bottom",
+                       strip.text = element_text(size = 7)) +
+        # Dynamic coordinate ratio to prevent squished bars
+        ggplot2::coord_fixed(ratio = max(prj_data$`Read counts`, na.rm = TRUE) / length(unique(prj_data$Stage)) * 0.75)
+
+      # Save plot
+      plot_file <- file.path(figs_path, paste0(project_name, "-samples_track.pdf"))
+      
+      ggplot2::ggsave(file = plot_file,
+                      plot = track_plot,
+                      device = "pdf",
+                      width = ifelse(N_samples <= 10, 8, 12),
+                      height = ifelse(N_samples <= 10, 4, N_samples / 6),
+                      units = "cm", 
+                      scale = 5, 
+                      limitsize = FALSE,
+                      dpi = 600)
+                      
+      message(paste0("  Saved tracking plot for ", PRJ, ": ", basename(plot_file)))
+      
+      # Open the PDF automatically in the system's default viewer
+      utils::browseURL(plot_file)
+    }
     ```
 
 ### Save the Environment!
