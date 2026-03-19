@@ -801,7 +801,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:
 
     | Primer  | R1                                       | R2                                       |
-    |:-----------------|:--------------------------|:--------------------------|
+    |:----------------|:--------------------------|:--------------------------|
     | **FWD** | **Forward** (good, 5' start of R1)       | **RevComp** (read-through, 3' end of R2) |
     | **REV** | **RevComp** (read-through, 3' end of R1) | **Forward** (good, 5' start of R2)       |
 
@@ -824,12 +824,12 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     **Troubleshooting: diagnosing orientation anomalies.**
 
-    | Pattern observed in the plot                                                                 | Likely cause                                                                                                | Recommended fix                                                                                                                                               |
+    | Pattern observed in the plot                                                                 | Likely cause                                                                                                | Recommended fix                                                                                                                                                   |
     |:------------------|:---------------------|:------------------------------|
-    | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                             |
-    | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                       |
-    | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                       |
-    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual `Cutadapt` strategy described above \[\^2\]                                                 |
+    | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                                 |
+    | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                           |
+    | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                           |
+    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual `Cutadapt` strategy described above \[\^2\]                                                   |
     | No primer detected in any orientation in any file                                            | Wrong primer pair selected; reads are already pre-trimmed; mismatches \> 1; incorrect file paths            | Verify primer sequences against the wet-lab protocol; confirm reads are not pre-trimmed (check `FastQC`/`MultiQC` report); increase `max.mismatch` to 2 as a test |
 
 ### Save the Environment!
@@ -1131,7 +1131,7 @@ The `Cutadapt` software (DOI:10.14806/ej.17.1.200) is used to remove primer sequ
 
 This section confirms that `Cutadapt` successfully excised all primer sequences before reads enter quality filtering and ASV inference. Using the same multi_primerHits() logic and primers_all_orients table from the raw-read detection step, residual primer hits are counted across all four orientations in every trimmed R1 and R2 file. Counts are then normalized by total reads per file to allow proportional comparison across samples.
 
-A well-trimmed library should show zero counts in all orientations for all primer sequences. Any residual Forward signal at the 5′ position of a read indicates that the corresponding adapter flag (-g or -G) failed to anchor and trim the primer — typically caused by a mismatch between the primer sequence entered and the one actually used in the library preparation, or by an incorrect orientation assignment in primers_n_samples. Residual RevComp signal at the 3′ end, on the other hand, indicates incomplete read-through trimming — check that the -a / -A flags carry the correct reverse-complement sequences and that --pair-filter any was active during the `Cutadapt` run. If residual hits exceed ~1% of reads in any sample, revisit the adapter flags before proceeding
+A well-trimmed library should show zero counts in all orientations for all primer sequences. Any residual Forward signal at the 5′ position of a read indicates that the corresponding adapter flag (-g or -G) failed to anchor and trim the primer — typically caused by a mismatch between the primer sequence entered and the one actually used in the library preparation, or by an incorrect orientation assignment in primers_n_samples. Residual RevComp signal at the 3′ end, on the other hand, indicates incomplete read-through trimming — check that the -a / -A flags carry the correct reverse-complement sequences and that --pair-filter any was active during the `Cutadapt` run. If residual hits exceed \~1% of reads in any sample, revisit the adapter flags before proceeding
 
 -   **Collect `Cutadapt` output files.** Builds a long-format table of trimmed FASTQ paths (R1 and R2) per sample and primer set.
 
@@ -1325,8 +1325,7 @@ A well-trimmed library should show zero counts in all orientations for all prime
 
 #### Quality checking post-Cutadapt
 
-With primer sequences removed, the `Cutadapt` output files now reflect only the biological sequence of the target amplicon. Running `FastQC` and `MultiQC` at this stage — before any quality-based filtering — reveals the true per-position quality landscape of the amplicon reads, free from the confounding effect of primer bases at the 5′ end.
-The resulting quality profiles should be used to set the `truncLen`, `maxEE`, and `minLen` parameters in the `filterAndTrim` step that follows. Pay particular attention to the per-position mean quality score plot: identify the position at which quality drops below Q30 (or Q25 for R2) and use that as the truncLen cutoff. The read length distribution panel will also reveal whether `Cutadapt` discarded a large fraction of reads due to the `--minimum-length` threshold — if so, consider relaxing it before re-running.
+With primer sequences removed, the `Cutadapt` output files now reflect only the biological sequence of the target amplicon. Running `FastQC` and `MultiQC` at this stage — before any quality-based filtering — reveals the true per-position quality landscape of the amplicon reads, free from the confounding effect of primer bases at the 5′ end. The resulting quality profiles should be used to set the `truncLen`, `maxEE`, and `minLen` parameters in the `filterAndTrim` step that follows. Pay particular attention to the per-position mean quality score plot: identify the position at which quality drops below Q30 (or Q25 for R2) and use that as the truncLen cutoff. The read length distribution panel will also reveal whether `Cutadapt` discarded a large fraction of reads due to the `--minimum-length` threshold — if so, consider relaxing it before re-running.
 
 -   **Check that trimmed files exist.** Confirms that `Cutadapt` output files exist before running `FastQC`/`MultiQC`.
 
@@ -1423,47 +1422,47 @@ With primers removed by `Cutadapt`, reads now reflect only the biological sequen
 
 The key parameters to adjust for your dataset are:
 
-    -   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
+-   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
 
-    -   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
+-   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
 
-    -   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
+-   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
 
-    -   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your `Cutadapt` output files to decide.
-    
-    -   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
+-   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your `Cutadapt` output files to decide.
 
-    -   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
+-   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
+
+-   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
 
     ```{r}
-    # Calculate number of samples and files being processed
-    n_samples <- length(filter_files_per_primer$Unique_File_name)
-    
-    n_files <- length(filter_files_per_primer$FWD_R1_filtered) + 
-      length(filter_files_per_primer$FWD_R2_filtered)
-    
-    # Run filtering in parallel across all read pairs
-    {
-      message("Filtering ", n_files, " files from ", n_samples, " samples. This may take a few minutes...")
-      
-      tictoc::tic()
-      
-      sample_filtered_out <- dada2::filterAndTrim(fwd = filter_files_per_primer$FWD_R1_cutadapt,
-                                                  filt = filter_files_per_primer$FWD_R1_filtered,
-                                                  rev = filter_files_per_primer$FWD_R2_cutadapt,
-                                                  filt.rev = filter_files_per_primer$FWD_R2_filtered,
-                                                  maxEE = c(2, 2),
-                                                  truncQ = 2,
-                                                  minLen = 100,
-                                                  matchIDs = TRUE,
-                                                  rm.phix = TRUE,
-                                                  # truncLen = c(0, 0),
-                                                  multithread = TRUE,
-                                                  compress = TRUE,
-                                                  verbose = TRUE
-                                                  )
-      tictoc::toc()
-    }
+# Calculate number of samples and files being processed
+n_samples <- length(filter_files_per_primer$Unique_File_name)
+
+n_files <- length(filter_files_per_primer$FWD_R1_filtered) + 
+  length(filter_files_per_primer$FWD_R2_filtered)
+
+# Run filtering in parallel across all read pairs
+{
+  message("Filtering ", n_files, " files from ", n_samples, " samples. This may take a few minutes...")
+  
+  tictoc::tic()
+  
+  sample_filtered_out <- dada2::filterAndTrim(fwd = filter_files_per_primer$FWD_R1_cutadapt,
+                                          filt = filter_files_per_primer$FWD_R1_filtered,
+                                          rev = filter_files_per_primer$FWD_R2_cutadapt,
+                                          filt.rev = filter_files_per_primer$FWD_R2_filtered,
+                                          maxEE = c(2, 2),
+                                          truncQ = 2,
+                                          minLen = 100,
+                                          matchIDs = TRUE,
+                                          rm.phix = TRUE,
+                                          # truncLen = c(0, 0),
+                                          multithread = TRUE,
+                                          compress = TRUE,
+                                          verbose = TRUE
+                                          )
+  tictoc::toc()
+}
     ```
 
 #### Quality checking post-filtering
@@ -1475,21 +1474,20 @@ The read retention summary produced by `filterAndTrim` (all_filtered_summary) sh
 -   **Check that trimmed files exist.** Confirms that `Cutadapt` output files exist before running `FastQC`/`MultiQC`.
 
     ```{r}
-    filtered_read_files <- cut_files_per_primer %>%
-      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
-      dplyr::pull(`Read file`) %>%
+    filtered_read_files <- c(filter_files_per_primer$FWD_R1_filtered,
+                             filter_files_per_primer$FWD_R2_filtered) %>%
       normalizePath() %>%
       unique()
 
-    cutadapted_read_files
+    filtered_read_files
 
-    if (length(cutadapted_read_files) > 0) {
+    if (length(filtered_read_files) > 0) {
       
-      message(length(cutadapted_read_files), " read files found for QC.")
+      message(length(filtered_read_files), " filtered read files found for QC.")
       
       } else {
 
-        stop("No read files found for QC. Check if Cutadapt ran successfully and output files were written.")
+        stop("No read files found for QC. Check if filterAndTrim ran successfully and output files were written.")
       }
     ```
 
@@ -1505,31 +1503,35 @@ The read retention summary produced by `filterAndTrim` (all_filtered_summary) sh
       dir.create(multiqc_path, recursive = TRUE, showWarnings = FALSE)
       
       # Filter reads belonging to this project
-      cutadapted_path <- cut_files_per_primer$`Read file`[cut_files_per_primer$Project == PRJ] %>%
+      filtered_path <- filter_files_per_primer %>%
+        dplyr::filter(Project == PRJ) %>%
+        dplyr::select(FWD_R1_filtered, FWD_R2_filtered) %>%
+        unlist() %>%
+        as.character() %>%
         unique()
       
-      project_cutadapted_reads <- cutadapted_read_files[stringr::str_detect(cutadapted_read_files,
-                                                                            paste0(cutadapted_path,
-                                                                                   collapse = "|"))]
+      project_filtered_reads <- filtered_read_files[stringr::str_detect(filtered_read_files,
+                                                                        paste0(filtered_path,
+                                                                               collapse = "|"))]
       
       # 1. Run FastQC
-      cmd_fastqc <- paste0("echo '", paste(project_cutadapted_reads, collapse = "\n"), "' | ",
+      cmd_fastqc <- paste0("echo '", paste(project_filtered_reads, collapse = "\\n"), "' | ",
                            "parallel fastqc {1} -t 20 -o ", 
                            fastqc_path)
       
       system(cmd_fastqc)
         
       # 2. Run MultiQC
-      cutadapt_report_name <- paste0(PRJ, "--post_cutadapt_quality-MultiQC_report.html")
+      filtered_report_name <- paste0(PRJ, "--post_filtered_quality-MultiQC_report.html")
       
       cmd_multiqc <- paste0("multiqc --interactive ",
                             fastqc_path, " --filename ",
-                            file.path(multiqc_path, cutadapt_report_name))
+                            file.path(multiqc_path, filtered_report_name))
       
       system(cmd_multiqc)
             
       # 3. Show MultQC report
-      browseURL(file.path(multiqc_path, cutadapt_report_name))
+      browseURL(file.path(multiqc_path, filtered_report_name))
     }
     ```
 
