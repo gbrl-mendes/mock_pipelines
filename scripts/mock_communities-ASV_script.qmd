@@ -226,11 +226,10 @@ After filling in the table, save it as .csv an place it on the data folder, insi
       base::unlist() %>%
       BiocGenerics::unique()
 
-    paste0("This analysis will by split into separate projects for:", 
+    message(paste0("This analysis will by split into separate projects for:", 
            paste0(c("\t", all_projects), 
-                  collapse = "\n\t")) %>% 
+                  collapse = "\n\t"))) %>% 
     cat() %>% 
-    message()
     ```
 
 -   **Identify files names radicals and levels.** Displays raw Unique_File_name values for manual inspection and establishes factor levels for consistent plotting order.
@@ -1394,28 +1393,35 @@ The resulting quality profiles should be used to set the `truncLen`, `maxEE`, an
 
 With primers removed by `Cutadapt`, reads now reflect only the biological sequence of the target amplicon and are ready for quality-based filtering. Unlike the pre-filtering step — which targeted only ambiguous bases — `filterAndTrim` is now applied with parameters that directly evaluate read quality, length, and integrity before ASV inference.
 
--   **Prepare file paths.** Map `Cutadapt` output files to new filtered output paths.
+-   **Prepare file paths.** Map `Cutadapt` output files to their respective future filtered paths.
 
     ```{r}
     # Map Cutadapt output to filtered file paths
-    filter_files_per_primer <- cut_files_per_primer %>%
-      dplyr::filter(stringr::str_detect(string = Stage, pattern = "_cutadapt")) %>%
+     filter_files_per_primer <- cut_files_per_primer %>%
+      dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
       dplyr::filter(file.exists(`Read file`)) %>%
-      tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer",
-                                 "Primer", "Run"),
-                     names_from  = "Stage",
-                     values_from = "Read file") %>%
+      tidyr::pivot_wider(id_cols = c("Unique_File_name", 
+                                     "Unique_File_name_Primer",
+                                     "Primer", 
+                                     "Run"),
+                         names_from  = "Stage",
+                         values_from = "Read file") %>%
       dplyr::mutate(FWD_R1_filtered = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "filtered"),
                     FWD_R2_filtered = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "filtered")) %>%
-      tidyr::unite(col = "Unique_File_name_Primer",
-                   sep = "--",
-                   remove = FALSE,
-                   Unique_File_name, Primer)
+      tidyr::unite(col    = "Unique_File_name_Primer",
+                   Unique_File_name, Primer,
+                   sep    = "--",
+                   remove = FALSE)
+
+    # Show prepared file paths
+    View(filter_files_per_primer)
     ```
 
 -   **Define filtering function.** Create a wrapper for `filterAndTrim` applying quality thresholds.
 
-    The key parameters to adjust for your dataset are:
+-   **Execute filtering.** Run DADA2's native `filterAndTrim` on all samples simultaneously.
+
+The key parameters to adjust for your dataset are:
 
     -   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
 
@@ -1424,74 +1430,40 @@ With primers removed by `Cutadapt`, reads now reflect only the biological sequen
     -   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
 
     -   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your `Cutadapt` output files to decide.
+    
+    -   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
 
     -   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
 
     ```{r}
-    quality_filter <- function(Unique_File_name_Primer,
-                               FWD_R1_in,
-                               FWD_R2_in,
-                               FWD_R1_out,
-                               FWD_R2_out) {
-      
-      if (file.exists(FWD_R1_in) && file.exists(FWD_R2_in)) {
-        
-        sample_filtered_out <- dada2::filterAndTrim(fwd = FWD_R1_in,
-                                                    filt = FWD_R1_out,
-                                                    rev = FWD_R2_in,
-                                                    filt.rev = FWD_R2_out,
-                                                    maxN = 0,
-      # Vector of length 2: first value applies to R1, second to R2.
-                                                    maxEE = c(2, 2),
-                                                    truncQ = 2,
-                                                    minLen = 100,
-                                                    rm.phix = TRUE,
-                                                    # truncLen = c(0, 0),
-                                                    multithread = TRUE,
-                                                    compress    = TRUE,
-                                                    verbose     = FALSE)
-        
-        tibble::as_tibble(sample_filtered_out) %>%
-          
-          dplyr::mutate(Unique_File_name_Primer = Unique_File_name_Primer)
-        } else {
-          
-          warning(paste("Missing files for:", Unique_File_name_Primer))
-          
-          return(tibble::tibble())
-        }
-      }
-    ```
-
--   **Execute filtering.** Run the filtering function in parallel across all samples and generate a summary table of read retention.
-
-    ```{r}
-    # Setup parallel processing
-    cores_to_be_used <- future::availableCores() - 2
-    future::plan(future::multisession(workers = cores_to_be_used))
-
-    # Run filtering in parallel
+    # Calculate number of samples and files being processed
+    n_samples <- length(filter_files_per_primer$Unique_File_name)
+    
+    n_files <- length(filter_files_per_primer$FWD_R1_filtered) + 
+      length(filter_files_per_primer$FWD_R2_filtered)
+    
+    # Run filtering in parallel across all read pairs
     {
+      message("Filtering ", n_files, " files from ", n_samples, " samples. This may take a few minutes...")
+      
       tictoc::tic()
       
-      all_filtered_out_fun <- furrr::future_pmap_dfr(list(filter_files_per_primer$Unique_File_name_Primer,
-                                                          filter_files_per_primer$FWD_R1_cutadapt,
-                                                          filter_files_per_primer$FWD_R2_cutadapt,
-                                                          filter_files_per_primer$FWD_R1_filtered,
-                                                          filter_files_per_primer$FWD_R2_filtered),
-                                                     .f = quality_filter,
-                                                     .options = furrr::furrr_options(seed = TRUE))
+      sample_filtered_out <- dada2::filterAndTrim(fwd = filter_files_per_primer$FWD_R1_cutadapt,
+                                                  filt = filter_files_per_primer$FWD_R1_filtered,
+                                                  rev = filter_files_per_primer$FWD_R2_cutadapt,
+                                                  filt.rev = filter_files_per_primer$FWD_R2_filtered,
+                                                  maxEE = c(2, 2),
+                                                  truncQ = 2,
+                                                  minLen = 100,
+                                                  matchIDs = TRUE,
+                                                  rm.phix = TRUE,
+                                                  # truncLen = c(0, 0),
+                                                  multithread = TRUE,
+                                                  compress = TRUE,
+                                                  verbose = TRUE
+                                                  )
       tictoc::toc()
     }
-  
-    # Generate summary table
-    all_filtered_summary <- all_filtered_out_fun %>%
-      dplyr::mutate(Proportion = round((reads.out / reads.in * 100), digits = 2)) %>%
-      dplyr::rename("Primer-trimmed reads (pairs)" = "reads.in",
-                    "Filtered reads (pairs)" = "reads.out")
-
-    # View result
-    all_filtered_summary
     ```
 
 #### Quality checking post-filtering
