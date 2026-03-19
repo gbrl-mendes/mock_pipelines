@@ -76,7 +76,7 @@ editor_options:
 
 ### Housekeeping
 
--   **Set `Cutadapt` path**
+-   **Set Cutadapt path**
 
     ```{r}
     # Path to cutadapt executable
@@ -257,7 +257,7 @@ After filling in the table, save it as .csv an place it on the data folder, insi
 
 ## 2. Raw Data Pre-processing
 
-The second phase of the pipeline focuses on the pre-processing and diagnostics of the raw sequencing reads. Before proceeding to ASV inference, it is critical to assess read quality (via `FastQC`/`MultiQC`) and validate primer presence and orientation. These diagnostic analyses ensure data integrity and inform the parameters required for the subsequent filtering and cleaning steps.
+The second phase of the pipeline focuses on the pre-processing and diagnostics of the raw sequencing reads. Before proceeding to ASV inference, it is critical to assess read quality (via FastQC/MultiQC) and validate primer presence and orientation. These diagnostic analyses ensure data integrity and inform the parameters required for the subsequent filtering and cleaning steps.
 
 ### Raw data aquisition
 
@@ -330,9 +330,9 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 
 ### Quality checking
 
-The raw sequencing reads are assessed for overall quality before any processing steps. This step runs `FastQC` and `MultiQC` on the demultiplexed files, generating per-project interactive reports. The resulting quality profiles — particularly per-position quality scores, GC content, and read length distributions — provide the baseline needed to interpret subsequent primer detection and filtering results.
+The raw sequencing reads are assessed for overall quality before any processing steps. This step runs FastQC and MultiQC on the demultiplexed files, generating per-project interactive reports. The resulting quality profiles — particularly per-position quality scores, GC content, and read length distributions — provide the baseline needed to interpret subsequent primer detection and filtering results.
 
--   **Check that demultiplexed files exist.** Confirms that the paths in `primers_n_samples` actually contain FASTQ files before running `FastQC`/`MultiQC`.
+-   **Check that demultiplexed files exist.** Confirms that the paths in `primers_n_samples` actually contain FASTQ files before running FastQC/MultiQC.
 
     ```{r}
     read_files <- primers_n_samples %>%
@@ -352,7 +352,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
         }
     ```
 
--   **Run `FastQC` and `MultiQC` by project.** Creates per‑project folders and runs quality control in batch using system calls.
+-   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
 
     ```{r}
     for (PRJ in all_projects) {
@@ -402,7 +402,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
 2.  It checks for potential laboratory cross-contamination or sequencing index-hopping by ensuring samples do not harbor unexpected primer sets;
 
-3.  It diagnoses the library's structural geometry (e.g., standard vs. mixed orientation) and highlights the presence of read-through events in short amplicons. Ultimately, this step generates a detailed visual matrix, allowing users to verify the integrity, purity, and orientation of the sequencing run before deploying `Cutadapt` for the actual primer excision.
+3.  It diagnoses the library's structural geometry (e.g., standard vs. mixed orientation) and highlights the presence of read-through events in short amplicons. Ultimately, this step generates a detailed visual matrix, allowing users to verify the integrity, purity, and orientation of the sequencing run before deploying Cutadapt for the actual primer excision.
 
 #### Identify paired-end read files
 
@@ -805,7 +805,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     | **FWD** | **Forward** (good, 5' start of R1)       | **RevComp** (read-through, 3' end of R2) |
     | **REV** | **RevComp** (read-through, 3' end of R1) | **Forward** (good, 5' start of R2)       |
 
-    The `RevComp` read-through signal is not an error — it is expected and **must** be handled by `Cutadapt`, which trims both the 5' primer and the 3' reverse-complement of the opposite primer from each read. The proportion of reads with read-through signal will vary with the length distribution of the target region: short amplicons will show near-equal counts in `Forward` and `RevComp`, while longer ones will show a weaker `RevComp` signal. *Typical examples:* ITS1/ITS2 fungal barcodes; short COI barcode fragments; short 16S V4 amplicons sequenced with 2×300 bp reads.
+    The `RevComp` read-through signal is not an error — it is expected and **must** be handled by Cutadapt, which trims both the 5' primer and the 3' reverse-complement of the opposite primer from each read. The proportion of reads with read-through signal will vary with the length distribution of the target region: short amplicons will show near-equal counts in `Forward` and `RevComp`, while longer ones will show a weaker `RevComp` signal. *Typical examples:* ITS1/ITS2 fungal barcodes; short COI barcode fragments; short 16S V4 amplicons sequenced with 2×300 bp reads.
 
     **Case 3 — Mixed orientation library.** Some library preparation protocols (e.g., HiSeq/NovaSeq workflows without strand-selection, certain ligation-based preps, or pooled multiplexing strategies) produce reads where approximately half the read pairs have FWD on R1 and the other half have REV on R1. In this scenario, the plot will show roughly equal counts of both primers in both read files in `Forward` orientation:
 
@@ -820,7 +820,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     -   **`dada2::removePrimers(..., orient = TRUE)`**: When using DADA2's own primer removal function, the `orient` parameter detects read pairs where the FWD primer is found at the start of R2 instead of R1, swaps the pair, and unifies orientation — no external tool required.
 
-    -   **Dual `Cutadapt` strategy (recommended for maximum read retention)**: Run `Cutadapt` twice — once with FWD anchored on R1 and REV on R2 (`standard` pairs), and once with REV anchored on R1 and FWD on R2 (`flipped` pairs), using `--discard-untrimmed` on each run to keep only correctly matched pairs. Run the full DADA2 pipeline independently on each subset, then merge the two resulting ASV tables, reverse-complementing all sequences from the `flipped` run to unify orientation before merging. This is the approach recommended by B. Callahan for mixed-orientation data.
+    -   **Dual Cutadapt strategy (recommended for maximum read retention)**: Run Cutadapt twice — once with FWD anchored on R1 and REV on R2 (`standard` pairs), and once with REV anchored on R1 and FWD on R2 (`flipped` pairs), using `--discard-untrimmed` on each run to keep only correctly matched pairs. Run the full DADA2 pipeline independently on each subset, then merge the two resulting ASV tables, reverse-complementing all sequences from the `flipped` run to unify orientation before merging. This is the approach recommended by B. Callahan for mixed-orientation data.
 
     **Troubleshooting: diagnosing orientation anomalies.**
 
@@ -829,8 +829,8 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                                 |
     | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                           |
     | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                           |
-    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual `Cutadapt` strategy described above \[\^2\]                                                   |
-    | No primer detected in any orientation in any file                                            | Wrong primer pair selected; reads are already pre-trimmed; mismatches \> 1; incorrect file paths            | Verify primer sequences against the wet-lab protocol; confirm reads are not pre-trimmed (check `FastQC`/`MultiQC` report); increase `max.mismatch` to 2 as a test |
+    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual Cutadapt strategy described above \[\^2\]                                                   |
+    | No primer detected in any orientation in any file                                            | Wrong primer pair selected; reads are already pre-trimmed; mismatches \> 1; incorrect file paths            | Verify primer sequences against the wet-lab protocol; confirm reads are not pre-trimmed (check FastQC/MultiQC report); increase `max.mismatch` to 2 as a test |
 
 ### Save the Environment!
 
@@ -844,17 +844,17 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
 This section executes the DADA2 core workflow to infer Amplicon Sequence Variants (ASVs) from the pre-processed reads. The workflow is organized into two phases:
 
-1.  **Read preparation**: ambiguous bases are removed, primers are excised with `Cutadapt`, their removal is verified, and a final quality filter is applied.
+1.  **Read preparation**: ambiguous bases are removed, primers are excised with Cutadapt, their removal is verified, and a final quality filter is applied.
 
 2.  **DADA2 inference steps**: a run-specific error model is learned, reads are denoised and merged, and chimeric sequences are removed, resulting in a high-resolution ASV table analogous to a traditional OTU table.
 
 ### Read Preparation and Primer Removal
 
-Before DADA2 can learn error rates and infer ASVs, reads must be free of ambiguous bases, primer sequences, and low-quality bases. This preparation is carried out in four sequential steps: a pre-filter to remove reads containing Ns, primer removal with `Cutadapt`, a sanity check confirming successful trimming, and a final quality filter applied to primer-free reads.
+Before DADA2 can learn error rates and infer ASVs, reads must be free of ambiguous bases, primer sequences, and low-quality bases. This preparation is carried out in four sequential steps: a pre-filter to remove reads containing Ns, primer removal with Cutadapt, a sanity check confirming successful trimming, and a final quality filter applied to primer-free reads.
 
 #### Pre-filtering reads
 
-DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the `Cutadapt` step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (**`maxN = 0`**). Comprehensive quality filtering, error tracking (such as **`maxEE`**), and length truncation are purposefully deferred until after primer removal.
+DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the Cutadapt step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (**`maxN = 0`**). Comprehensive quality filtering, error tracking (such as **`maxEE`**), and length truncation are purposefully deferred until after primer removal.
 
 -   **Prepare file paths.** Identify paired-end read files that contain primers and organize their paths for the filtering step.
 
@@ -949,11 +949,11 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
     pre_filtered_summary
     ```
 
-#### Remove Primers with `Cutadapt`
+#### Remove Primers with Cutadapt
 
-The `Cutadapt` software (DOI:10.14806/ej.17.1.200) is used to remove primer sequences from reads, also capable of handling read-through scenarios.
+The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequences from reads, also capable of handling read-through scenarios.
 
--   **Configure output paths.** Map sample names to new `Cutadapt` output filenames, ensuring separation by primer set if necessary.
+-   **Configure output paths.** Map sample names to new Cutadapt output filenames, ensuring separation by primer set if necessary.
 
     ```{r}
     # Map sample names to Cutadapt output files (identify paired samples for Cutadapt input)
@@ -1026,7 +1026,7 @@ The `Cutadapt` software (DOI:10.14806/ej.17.1.200) is used to remove primer sequ
       }
     ```
 
--   **Build adapter flags.** Define the -g, -a, -G, and -A `Cutadapt` flags for each primer set.
+-   **Build adapter flags.** Define the -g, -a, -G, and -A Cutadapt flags for each primer set.
 
     -   **`-g`**: Removes the forward primer from the 5′ end of R1. Use this when the forward primer is expected at the start of the forward read.
 
@@ -1082,9 +1082,9 @@ The `Cutadapt` software (DOI:10.14806/ej.17.1.200) is used to remove primer sequ
       }
     ```
 
--   **Execute `Cutadapt`.** Iterate over each valid input file pair and invoke the `Cutadapt` **`system2`** command. **Key parameters to configure for your dataset**:
+-   **Execute Cutadapt.** Iterate over each valid input file pair and invoke the Cutadapt **`system2`** command. **Key parameters to configure for your dataset**:
 
-    -   **`-j`**: Number of CPU threads. Set to `0` to let `Cutadapt` auto-detect all available cores.
+    -   **`-j`**: Number of CPU threads. Set to `0` to let Cutadapt auto-detect all available cores.
 
     -   **`-n`**: Number of adapter trimming rounds per read. Set to `1` for standard libraries; increase if read-through could place a primer and its reverse complement on the same read.
 
@@ -1129,11 +1129,11 @@ The `Cutadapt` software (DOI:10.14806/ej.17.1.200) is used to remove primer sequ
 
 #### Primer Removal Verification
 
-This section confirms that `Cutadapt` successfully excised all primer sequences before reads enter quality filtering and ASV inference. Using the same multi_primerHits() logic and primers_all_orients table from the raw-read detection step, residual primer hits are counted across all four orientations in every trimmed R1 and R2 file. Counts are then normalized by total reads per file to allow proportional comparison across samples.
+This section confirms that Cutadapt successfully excised all primer sequences before reads enter quality filtering and ASV inference. Using the same multi_primerHits() logic and primers_all_orients table from the raw-read detection step, residual primer hits are counted across all four orientations in every trimmed R1 and R2 file. Counts are then normalized by total reads per file to allow proportional comparison across samples.
 
-A well-trimmed library should show zero counts in all orientations for all primer sequences. Any residual Forward signal at the 5′ position of a read indicates that the corresponding adapter flag (-g or -G) failed to anchor and trim the primer — typically caused by a mismatch between the primer sequence entered and the one actually used in the library preparation, or by an incorrect orientation assignment in primers_n_samples. Residual RevComp signal at the 3′ end, on the other hand, indicates incomplete read-through trimming — check that the -a / -A flags carry the correct reverse-complement sequences and that --pair-filter any was active during the `Cutadapt` run. If residual hits exceed \~1% of reads in any sample, revisit the adapter flags before proceeding
+A well-trimmed library should show zero counts in all orientations for all primer sequences. Any residual Forward signal at the 5′ position of a read indicates that the corresponding adapter flag (-g or -G) failed to anchor and trim the primer — typically caused by a mismatch between the primer sequence entered and the one actually used in the library preparation, or by an incorrect orientation assignment in primers_n_samples. Residual RevComp signal at the 3′ end, on the other hand, indicates incomplete read-through trimming — check that the -a / -A flags carry the correct reverse-complement sequences and that --pair-filter any was active during the Cutadapt run. If residual hits exceed \~1% of reads in any sample, revisit the adapter flags before proceeding
 
--   **Collect `Cutadapt` output files.** Builds a long-format table of trimmed FASTQ paths (R1 and R2) per sample and primer set.
+-   **Collect Cutadapt output files.** Builds a long-format table of trimmed FASTQ paths (R1 and R2) per sample and primer set.
 
     ```{r}
     # Restrict to Cutadapt outputs (R1/R2 trimmed files that actually exist)
@@ -1325,9 +1325,9 @@ A well-trimmed library should show zero counts in all orientations for all prime
 
 #### Quality checking post-Cutadapt
 
-With primer sequences removed, the `Cutadapt` output files now reflect only the biological sequence of the target amplicon. Running `FastQC` and `MultiQC` at this stage — before any quality-based filtering — reveals the true per-position quality landscape of the amplicon reads, free from the confounding effect of primer bases at the 5′ end. The resulting quality profiles should be used to set the `truncLen`, `maxEE`, and `minLen` parameters in the `filterAndTrim` step that follows. Pay particular attention to the per-position mean quality score plot: identify the position at which quality drops below Q30 (or Q25 for R2) and use that as the truncLen cutoff. The read length distribution panel will also reveal whether `Cutadapt` discarded a large fraction of reads due to the `--minimum-length` threshold — if so, consider relaxing it before re-running.
+With primer sequences removed, the Cutadapt output files now reflect only the biological sequence of the target amplicon. Running FastQC and MultiQC at this stage — before any quality-based filtering — reveals the true per-position quality landscape of the amplicon reads, free from the confounding effect of primer bases at the 5′ end. The resulting quality profiles should be used to set the `truncLen`, `maxEE`, and `minLen` parameters in the `filterAndTrim` step that follows. Pay particular attention to the per-position mean quality score plot: identify the position at which quality drops below Q30 (or Q25 for R2) and use that as the truncLen cutoff. The read length distribution panel will also reveal whether Cutadapt discarded a large fraction of reads due to the `--minimum-length` threshold — if so, consider relaxing it before re-running.
 
--   **Check that trimmed files exist.** Confirms that `Cutadapt` output files exist before running `FastQC`/`MultiQC`.
+-   **Check that trimmed files exist.** Confirms that Cutadapt output files exist before running FastQC/MultiQC.
 
     ```{r}
     cutadapted_read_files <- cut_files_per_primer %>%
@@ -1348,7 +1348,7 @@ With primer sequences removed, the `Cutadapt` output files now reflect only the 
       }
     ```
 
--   **Run `FastQC` and `MultiQC` by project.** Creates per‑project folders and runs quality control in batch using system calls.
+-   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
 
     ```{r}
     for (PRJ in all_projects) {
@@ -1390,9 +1390,9 @@ With primer sequences removed, the `Cutadapt` output files now reflect only the 
 
 #### Filter and Trim
 
-With primers removed by `Cutadapt`, reads now reflect only the biological sequence of the target amplicon and are ready for quality-based filtering. Unlike the pre-filtering step — which targeted only ambiguous bases — `filterAndTrim` is now applied with parameters that directly evaluate read quality, length, and integrity before ASV inference.
+With primers removed by Cutadapt, reads now reflect only the biological sequence of the target amplicon and are ready for quality-based filtering. Unlike the pre-filtering step — which targeted only ambiguous bases — `filterAndTrim` is now applied with parameters that directly evaluate read quality, length, and integrity before ASV inference.
 
--   **Prepare file paths.** Map `Cutadapt` output files to their respective future filtered paths.
+-   **Prepare file paths.** Map Cutadapt output files to their respective future filtered paths.
 
     ```{r}
     # Map Cutadapt output to filtered file paths
@@ -1422,17 +1422,17 @@ With primers removed by `Cutadapt`, reads now reflect only the biological sequen
 
 The key parameters to adjust for your dataset are:
 
--   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
+    -   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
 
--   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
+    -   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
 
--   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
+    -   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
 
--   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your `Cutadapt` output files to decide.
+    -   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your Cutadapt output files to decide.
 
--   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
+    -   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
 
--   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
+    -   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
 
     ```{r}
 # Calculate number of samples and files being processed
@@ -1467,11 +1467,11 @@ n_files <- length(filter_files_per_primer$FWD_R1_filtered) +
 
 #### Quality checking post-filtering
 
-After filterAndTrim has been applied, this section re-runs `FastQC` and `MultiQC` on the filtered output files to confirm that the quality thresholds were effective. Unlike the post-Cutadapt check — which informed the choice of filtering parameters — this step serves as a validation: it verifies that low-quality bases were successfully removed, that read length distributions conform to the expected amplicon size range, and that no systematic artefacts were introduced by truncation.
+After filterAndTrim has been applied, this section re-runs FastQC and MultiQC on the filtered output files to confirm that the quality thresholds were effective. Unlike the post-Cutadapt check — which informed the choice of filtering parameters — this step serves as a validation: it verifies that low-quality bases were successfully removed, that read length distributions conform to the expected amplicon size range, and that no systematic artefacts were introduced by truncation.
 
 The read retention summary produced by `filterAndTrim` (all_filtered_summary) should be inspected alongside these reports. A well-calibrated filtering step typically achieves an acceptable read retention rate of 80% to 90% (or higher) of the input reads. If the filtered quality profiles still show a high proportion of low-quality bases, or if the retention rate falls significantly below this acceptable range, return to the filterAndTrim parameters to carefully adjust `maxEE`, `truncLen`, or `minLen` for your specific dataset and marker.
 
--   **Check that trimmed files exist.** Confirms that `Cutadapt` output files exist before running `FastQC`/`MultiQC`.
+-   **Check that trimmed files exist.** Confirms that Cutadapt output files exist before running FastQC/MultiQC.
 
     ```{r}
     filtered_read_files <- c(filter_files_per_primer$FWD_R1_filtered,
@@ -1491,7 +1491,7 @@ The read retention summary produced by `filterAndTrim` (all_filtered_summary) sh
       }
     ```
 
--   **Run `FastQC` and `MultiQC` by project.** Creates per‑project folders and runs quality control in batch using system calls.
+-   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
 
     ```{r}
     for (PRJ in all_projects) {
@@ -1537,139 +1537,210 @@ The read retention summary produced by `filterAndTrim` (all_filtered_summary) sh
 
 ### Learn Error Rates and Infer ASVs
 
--   **Process by sequencing run.** DADA2 error models must be learned separately for each sequencing run. This step iterates through runs to learn errors, dereplicate reads, and infer ASVs.
+With primers removed and low-quality bases filtered out, the reads are ready for the core of the DADA2 pipeline: the inference of Amplicon Sequence Variants (ASVs). Unlike traditional clustering methods that group reads into OTUs based on an arbitrary similarity threshold (e.g., 97%), DADA2 uses a machine-learning model to distinguish true biological variants from sequencing errors down to a single nucleotide difference. Because error profiles depend on the specific sequencing chemistry, machine state, and run conditions, the error rates must be learned independently for each sequencing run. Once the error model is computed, identical reads are dereplicated to reduce computational load, and the core `dada()` algorithm is applied to infer the true ASVs present in each sample.
+
+-   **Learn Error Rates.** Iterates through each unique sequencing run to calculate its specific error model and generates diagnostic plots for quality control. This is a computationally intensive step.
 
     ```{r}
-    # Initialize containers for DADA2 objects
+    # Initialize lists to store error models per run
+    err_models_F <- list()
+    err_models_R <- list()
+
+    # Loop through each sequencing run to learn errors
+    for (seq_run in unique(filter_files_per_primer$Run)) {
+      
+      message(paste0("Learning errors for Run: ", seq_run))
+      
+      # Get filtered file lists for this run
+      seq_files <- filter_files_per_primer %>%
+        dplyr::filter(Run == seq_run) %>%
+        dplyr::filter(file.exists(FWD_R1_filtered) & file.exists(FWD_R2_filtered))
+
+      seq_fnFs <- seq_files$FWD_R1_filtered
+      seq_fnRs <- seq_files$FWD_R2_filtered
+      
+      # Learn Error Rates
+      tictoc::tic()
+      message("  Learning forward errors...")
+      err_models_F[[seq_run]] <- dada2::learnErrors(fls = seq_fnFs, 
+                                                    multithread = TRUE, 
+                                                    randomize = TRUE, 
+                                                    verbose = TRUE)
+                                     
+      message("  Learning reverse errors...")                               
+      err_models_R[[seq_run]] <- dada2::learnErrors(fls = seq_fnRs, 
+                                                    multithread = TRUE, 
+                                                    randomize = TRUE, 
+                                                    verbose = TRUE)
+      tictoc::toc()
+      
+      # Save error plots for quality control review
+      error_plot_path <- file.path(results_path, paste0(seq_run, "_error_rates.pdf"))
+      
+      err_plotF <- dada2::plotErrors(err_models_F[[seq_run]], nominalQ = TRUE) + 
+        ggplot2::ggtitle(paste("Forward Errors -", seq_run))
+        
+      err_plotR <- dada2::plotErrors(err_models_R[[seq_run]], nominalQ = TRUE) + 
+        ggplot2::ggtitle(paste("Reverse Errors -", seq_run))
+        
+      ggplot2::ggsave(filename = error_plot_path,
+                      plot = gridExtra::arrangeGrob(err_plotF, err_plotR, ncol = 2),
+                      width = 12, height = 5)
+                      
+      message(paste0("  Error plots saved to: ", error_plot_path))
+      
+      # Open the PDF automatically in the system's default viewer
+      utils::browseURL(error_plot_path)
+    }
+    ```
+
+-   **Dereplicate and Infer ASVs.** Using the pre-calculated error models, identical reads are dereplicated to reduce computational load, and the core `dada()` algorithm is applied to infer the ASVs present in each sample.
+
+    ```{r}
+    # Initialize empty lists to store DADA2 output objects per sample
     all_dadaFs <- list()
     all_dadaRs <- list()
     all_derep_forward <- list()
     all_derep_reverse <- list()
 
-    # Loop through each sequencing run ----
-    for (seq in unique(primers_n_samples$Run)) {
+    # Loop through each sequencing run for inference
+    for (seq_run in unique(filter_files_per_primer$Run)) {
       
-      message(paste0("Processing Run: ", seq))
+      message(paste0("Processing inference for Run: ", seq_run))
       
-      # 1. Get file lists for this run ----
-      seq_files <- repair_files_per_primer %>%
-    dplyr::filter(Run == seq) %>%
-    dplyr::filter(file.exists(FWD_R1_repaired) & file.exists(FWD_R2_repaired))
+      # Get filtered file lists for this run
+      seq_files <- filter_files_per_primer %>%
+        dplyr::filter(Run == seq_run) %>%
+        dplyr::filter(file.exists(FWD_R1_filtered) & file.exists(FWD_R2_filtered))
 
-      seq_fnFs <- seq_files$FWD_R1_repaired
-      seq_fnRs <- seq_files$FWD_R2_repaired
+      seq_fnFs <- seq_files$FWD_R1_filtered
+      seq_fnRs <- seq_files$FWD_R2_filtered
       names(seq_fnFs) <- seq_files$Unique_File_name_Primer
       names(seq_fnRs) <- seq_files$Unique_File_name_Primer
-      
-      # 2. Learn Error Rates ----
-      # Using nbases=1e9 (1 billion bases) is usually sufficient and faster than 1e16
-      seq_errF <- dada2::learnErrors(
-    fls = seq_fnFs, multithread = TRUE, randomize = TRUE, verbose = TRUE
-      )
-      seq_errR <- dada2::learnErrors(
-    fls = seq_fnRs, multithread = TRUE, randomize = TRUE, verbose = TRUE
-      )
-      
-      # Visualize errors (optional, saved to plot list if needed, here just printed)
-      print(dada2::plotErrors(seq_errF, nominalQ = TRUE) + ggplot2::ggtitle(paste("Forward Errors -", seq)))
-      print(dada2::plotErrors(seq_errR, nominalQ = TRUE) + ggplot2::ggtitle(paste("Reverse Errors -", seq)))
 
-      # 3. Dereplication ----
-      seq_derep_forward <- dada2::derepFastq(seq_fnFs, verbose = TRUE)
-      seq_derep_reverse <- dada2::derepFastq(seq_fnRs, verbose = TRUE)
+      # Dereplication
+      message("  Dereplicating reads...")
+      seq_derep_forward <- dada2::derepFastq(seq_fnFs, verbose = FALSE)
+      seq_derep_reverse <- dada2::derepFastq(seq_fnRs, verbose = FALSE)
       
-      # 4. Sample Inference (DADA2 Algorithm) ----
-      seq_dadaFs <- dada2::dada(seq_derep_forward, err = seq_errF, multithread = TRUE)
-      seq_dadaRs <- dada2::dada(seq_derep_reverse, err = seq_errR, multithread = TRUE)
+      # Sample Inference (DADA2 Algorithm) applying the specific run's error model
+      message("  Inferring ASVs...")
+      seq_dadaFs <- dada2::dada(seq_derep_forward, err = err_models_F[[seq_run]],
+                                multithread = TRUE, verbose = FALSE)
+      seq_dadaRs <- dada2::dada(seq_derep_reverse, err = err_models_R[[seq_run]],
+                                multithread = TRUE, verbose = FALSE)
       
-      # Append to global lists
-      # Note: lists are appended directly. If 'seq_dadaFs' is a list of objects, c() combines them flatly.
-      all_dadaFs <- c(all_dadaFs, seq_dadaFs)
-      all_dadaRs <- c(all_dadaRs, seq_dadaRs)
-      all_derep_forward <- c(all_derep_forward, seq_derep_forward)
-      all_derep_reverse <- c(all_derep_reverse, seq_derep_reverse)
+      # Append to global lists maintaining list hierarchy
+      all_dadaFs <- append(all_dadaFs, seq_dadaFs)
+      all_dadaRs <- append(all_dadaRs, seq_dadaRs)
+      all_derep_forward <- append(all_derep_forward, seq_derep_forward)
+      all_derep_reverse <- append(all_derep_reverse, seq_derep_reverse)
     }
+    
+    message("ASV Inference Complete across all runs.")
     ```
 
 ### Construct Sequence Table and Remove Chimeras
 
--   **Merge paired reads.** Combine forward and reverse reads to reconstruct the full amplicon.
+Following ASV inference, the independently processed forward and reverse reads must be recombined into a single, full-length amplicon sequence. DADA2 strictly requires a perfect overlap between the paired ends; reads that fail to align precisely due to poor quality or insufficient overlap length are discarded. Once the full amplicons are reconstructed, a critical filtration step is applied to remove chimeric sequences. Chimeras are artificial recombinations formed during PCR when an aborted amplicon extension acts as a primer in the next cycle, fusing segments of two distinct biological sequences. Because DADA2 resolves sequences at single-nucleotide precision, these chimeras are readily identified and removed, producing a pristine final sequence table.
+
+-   **Merge paired reads.** Combine the inferred forward and reverse ASVs to reconstruct the full target amplicon. Only reads that perfectly overlap (without mismatches) by at least the specified minimum length are successfully merged.
 
     ```{r}
-    # Merge read pairs
-    all_mergers <- dada2::mergePairs(
-      dadaF = all_dadaFs,
-      derepF = all_derep_forward,
-      dadaR = all_dadaRs,
-      derepR = all_derep_reverse,
-      minOverlap = 10,
-      maxMismatch = 0,
-      verbose = TRUE
-    )
-
-    # Construct Sequence Table (ASV table
-    mergers_seqtab <- dada2::makeSequenceTable(all_mergers)
-
-    # Check ASV length distribution
-    table(nchar(dada2::getSequences(mergers_seqtab)))
+    {
+      message("Merging paired-end reads...")
+      all_mergers <- dada2::mergePairs(dadaF = all_dadaFs,
+                                       derepF = all_derep_forward,
+                                       dadaR = all_dadaRs,
+                                       derepR = all_derep_reverse,
+                                       minOverlap = 10,
+                                       maxMismatch = 0,
+                                       verbose = FALSE)
+      # Construct Sequence Table (ASV table)
+      mergers_seqtab <- dada2::makeSequenceTable(all_mergers)
+      # Check raw ASV length distribution
+      message("Amplicon length distribution before chimera removal:")
+      table(nchar(dada2::getSequences(mergers_seqtab)))
+    }
     ```
 
--   **Remove chimeras.** Identify and remove artifactual chimeric sequences.
+-   **Remove chimeras.** Identify and remove artifactual sequences formed during PCR amplification when two different biological sequences combine. The `method="consensus"` compares sequences across samples to confidently detect these artifacts.
 
     ```{r}
-    # Remove Chimeras
-    mergers_seqtab_nochim <- dada2::removeBimeraDenovo(
-      mergers_seqtab, 
-      method = "consensus", 
-      multithread = TRUE, 
-      verbose = TRUE
-    )
-
-    # Calculate chimera removal stats
-    chimera_prop <- sum(mergers_seqtab_nochim) / sum(mergers_seqtab)
-    message(paste0("Retained ", round(chimera_prop * 100, 2), "% of reads after chimera removal."))
-
-    # Inspect final length distribution
-    table(nchar(dada2::getSequences(mergers_seqtab_nochim)))
+    {
+      message("Identifying and removing chimeric sequences...")
+      
+      mergers_seqtab_nochim <- dada2::removeBimeraDenovo(mergers_seqtab,
+                                                         method = "consensus",
+                                                         multithread = TRUE,
+                                                         verbose = TRUE)
+      
+      # Calculate chimera removal stats
+      chimera_prop <- base::sum(mergers_seqtab_nochim) / base::sum(mergers_seqtab)
+      message(paste0("Retained ", base::round(chimera_prop * 100, 2), 
+                     "% of reads after chimera removal."))
+      
+      # Inspect final length distribution
+      message("Final Amplicon length distribution (No Chimeras):")
+      table(nchar(dada2::getSequences(mergers_seqtab_nochim)))
+      
+      # Save the final pristine sequence table as an R object to prevent data loss
+      saveRDS(mergers_seqtab_nochim, file = file.path(results_path, "seqtab_nochim.rds"))
+      message("Saved final sequence table to: ", file.path(results_path,
+                                                           "seqtab_nochim.rds"))
+    }
     ```
 
 ### Track Read Retention
 
--   **Compile statistics.** Gather read counts from every processing step (Raw -\> Paired -\> Repaired -\> Denoised -\> Merged -\> Non-chimeric) to assess pipeline quality.
+A fundamental quality control practice in metabarcoding is monitoring the proportion of reads that successfully survive each step of the bioinformatic pipeline. Extreme drops in read counts at specific stages often indicate technical issues. For instance, massive losses during the initial filtering step may point to poor sequencing quality or overly aggressive truncation parameters, whereas massive losses during the merging step usually indicate that the reads are too short to properly overlap (e.g., severe read-through or improper size selection). This section aggregates the sequence retention metrics from raw inputs through the final chimera removal, generating a comprehensive diagnostic table for auditing and reporting.
+
+-   **Compile statistics.** Gather read counts from every processing step (Raw/Cutadapt -> Filtered -> Denoised -> Merged -> Non-chimeric) to assess pipeline quality and detect samples where massive data loss occurred.
 
     ```{r}
     # Helper function to extract counts from DADA objects
-    getN <- function(x) sum(dada2::getUniques(x))
+    getN <- function(x) { sum(dada2::getUniques(x)) }
 
-    # Extract counts for DADA2 steps
-    tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN), name = "Unique_File_name_Primer", value = "Denoised (R1)")
-    tbl_Denoised_R2 <- tibble::enframe(sapply(all_dadaRs, getN), name = "Unique_File_name_Primer", value = "Denoised (R2)")
-    tbl_Merged <- tibble::enframe(rowSums(mergers_seqtab), name = "Unique_File_name_Primer", value = "Merged")
-    tbl_NonChim <- tibble::enframe(rowSums(mergers_seqtab_nochim), name = "Unique_File_name_Primer", value = "Non-chimeric Merged")
+    # Extract counts for all DADA2 steps into named tibbles
+    tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN), 
+                                       name = "Unique_File_name_Primer", 
+                                       value = "Denoised (R1)")
+    
+    tbl_Denoised_R2 <- tibble::enframe(sapply(all_dadaRs, getN), 
+                                       name = "Unique_File_name_Primer", 
+                                       value = "Denoised (R2)")
+    
+    tbl_Merged <- tibble::enframe(rowSums(mergers_seqtab), 
+                                       name = "Unique_File_name_Primer", 
+                                  value = "Merged")
+    
+    tbl_NonChim <- tibble::enframe(rowSums(mergers_seqtab_nochim), 
+                                       name = "Unique_File_name_Primer", 
+                                   value = "Non-chimeric Merged")
 
-    # Combine with previous stats
-    # (Assumes 'all_filtered_out' and 'all_repaired' exist from previous chunks)
+    # Combine all tracking metrics into a single cohesive table
+    # It builds upon the 'all_filtered_summary' we generated during the filterAndTrim step
+    all_track <- list(all_filtered_summary, # Contains "Primer-trimmed reads (pairs)" and "Filtered reads (pairs)"
+                      tbl_Denoised_R1,
+                      tbl_Denoised_R2,
+                      tbl_Merged,
+                      tbl_NonChim) %>%
+      purrr::reduce(dplyr::left_join, by = "Unique_File_name_Primer") %>%
+      # Separate the composite name back to map against metadata
+      tidyr::separate(Unique_File_name_Primer, 
+                      into = c("Unique_File_name", "Primer"), 
+                      sep = "--", 
+                      remove = FALSE) %>%
+      dplyr::left_join(primers_n_samples, by = c("Unique_File_name", "Primer")) %>%
+      # Reorder columns logically
+      dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer)
 
-    # Prepare base table from Repaired stats
-    all_track <- all_repaired %>%
-      tidyr::separate(Unique_File_name_Primer, into = c("Unique_File_name", "Primer"), sep = "--", remove = FALSE) %>%
-      dplyr::left_join(all_filtered_out, by = "Unique_File_name") %>%
-      dplyr::left_join(tbl_Denoised_R1, by = "Unique_File_name_Primer") %>%
-      dplyr::left_join(tbl_Denoised_R2, by = "Unique_File_name_Primer") %>%
-      dplyr::left_join(tbl_Merged, by = "Unique_File_name_Primer") %>%
-      dplyr::left_join(tbl_NonChim, by = "Unique_File_name_Primer") %>%
-      dplyr::left_join(primers_n_samples, by = "Unique_File_name") # Add metadata
-
-    # Save stats to Excel
-    for (PRJ in all_projects) {
-      prj_track <- all_track %>% dplyr::filter(Project == PRJ)
-      writexl::write_xlsx(
-    prj_track,
-    path = file.path(results_path, paste0(PRJ, "-reads_and_seqs_counts-", Sys.Date(), ".xlsx"))
-      )
-    }
-
-    # (Optional: Visualization code would follow here, using 'track_tbl' logic from original script)
+    # Show preview
+    all_track %>% 
+      dplyr::select(Unique_File_name_Primer, 
+                    `Filtered reads (pairs)`, 
+                    `Non-chimeric Merged`) %>%
+      View()
     ```
 
 ### Save the Environment!
