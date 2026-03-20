@@ -54,13 +54,18 @@ editor_options:
       dmx_path <- file.path(pipe_libs, "dmx")
       dmx_all_path <- file.path(dmx_path, "all_dmx")
       dmx_combined_path <- file.path(dmx_path, "all_combined")
+      nochim_path <- file.path(results_path, "non_chimera")
+      tables_path <- file.path(results_path, "tables")
+      track_path <- file.path(results_path, "track_plots")
+      error_path <- file.path(results_path, "error_plot")
     }
 
     # Paths to be created
     paths <- c(prjct_path, env_path, data_path, pipe_libs, raw_libs,
                paired_libs, cutadapt_libs, qual_path, results_path,
                figs_path, blast_path, swarm_path, dmx_path, dmx_all_path,
-               dmx_combined_path)
+               dmx_combined_path, nochim_path, tables_path, track_path,
+               error_path)
 
     for (dir in paths) {
       if (dir.exists(dir)) {
@@ -151,7 +156,7 @@ editor_options:
                      "Raw reads (R1)" = "#B11901FF",
                      "Raw reads (R2)" = "#B11901FF",
                      "Paired reads" = "#F25F14FF",
-                     "Primer detected reads" = "#FE942AFF",
+                     "Primer detected reads (pairs)" = "#FE942AFF",
                      "Primer detected reads (R1)" = "#F7C13AFF",
                      "Primer detected reads (R2)" = "#F7C13AFF",
                      "Repaired reads" = "#DAE336FF",
@@ -229,8 +234,7 @@ After filling in the table, save it as .csv an place it on the data folder, insi
 
     message(paste0("This analysis will by split into separate projects for:", 
            paste0(c("\t", all_projects), 
-                  collapse = "\n\t"))) %>% 
-    cat() %>% 
+                  collapse = "\n\t"))) 
     ```
 
 -   **Identify files names radicals and levels.** Displays raw Unique_File_name values for manual inspection and establishes factor levels for consistent plotting order.
@@ -602,6 +606,8 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     # Count primer occurrences across all files x all primer orientations (parallel)
     {
+      tictoc::tic()
+      
       message("Searching primers across ", length(reads_seqs), " files using ",
               cores_to_use, " cores. This may take a few minutes...")
       
@@ -610,6 +616,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                                                  primers = primers_seqs,
                                                  .options = 
                                                    furrr::furrr_options(seed = NULL))
+      tictoc::toc()
     }
 
     # Join with sample metadata and calculate total reads per file
@@ -753,9 +760,9 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                             space = "free")
 
       # 4. Save the plot
-      ggplot2::ggsave(file = paste0(results_path, "/", 
+      ggplot2::ggsave(file = paste0(track_path, "/", 
                                     PRJ, 
-                                    "-primers_found_in_reads_1e.pdf"),
+                                    "-primers_found_in_reads.pdf"),
                       plot = primers_tile,
                       device = "pdf",
                       width = 10 + (n_primers * 10),
@@ -763,10 +770,9 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                       units = "cm",
                       limitsize = FALSE,
                       dpi = 600)
-       
-      browseURL(paste0(results_path, "/", 
-                          PRJ, 
-                          "-primers_found_in_reads_1e.pdf"))
+      
+      # 5. Open the plot 
+      utils::browseURL(paste0(track_path, "/", PRJ, "-primers_found_in_reads.pdf"))
       }
     ```
 
@@ -869,6 +875,9 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
       tidyr::pivot_wider(id_cols = c("Unique_File_name", "Primer", "Lib"),
                          names_from = "Stage",
                          values_from = "Read file")
+    
+    # Show plot
+    View(primer_paired_files)
 
     # Verify basenames (optional check)
     # primer_paired_files$FWD_R1 %>% BiocGenerics::basename()
@@ -928,7 +937,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
       message("Removing ambigous bases across ", length(files_to_filt), " files using ", 
               cores_to_use, " cores. This may take a few minutes...")
       
-      all_filtered_out_fun <-
+      pre_filtered_out <-
         furrr::future_pmap_dfr(list(primer_paired_files$Unique_File_name,
                                     primer_paired_files$FWD_R1,
                                     primer_paired_files$FWD_R2,
@@ -940,11 +949,11 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
     }
 
     # Generate summary table
-    pre_filtered_summary <- all_filtered_out_fun %>%
+    pre_filtered_summary <- pre_filtered_out %>%
       dplyr::mutate(Proportion = round((reads.out / reads.in * 100), 
                                        digits = 2)) %>% 
       dplyr::rename("Raw reads (pairs)" = "reads.in",
-                    "Filtered reads"    = "reads.out")
+                    "Pre-Filtered reads (pairs)" = "reads.out")
 
     # View result
     pre_filtered_summary
@@ -1152,8 +1161,7 @@ A well-trimmed library should show zero counts in all orientations for all prime
 
     ```{r}
     # Build named vector of Cutadapt FASTQ paths (names = sample identifiers)
-    # cutadapt_reads_seqs <- cutadapt_check_seqs_tbl$`Read file`
-    cutadapt_reads_seqs <- reads_seqs_tbl$`Read file`
+    cutadapt_reads_seqs <- cutadapt_check_seqs_tbl$`Read file`
     names(cutadapt_reads_seqs) <- cutadapt_check_seqs_tbl$Unique_File_name
 
     # Extract all primer orientations as named vector (same object used pre-Cutadapt)
@@ -1166,24 +1174,30 @@ A well-trimmed library should show zero counts in all orientations for all prime
 
     # Count residual primer occurrences across all files × all primer orientations (parallel)
     {
+      tictoc::tic()
+      
       message("Searching residual primers across ", length(cutadapt_reads_seqs),
               " post-Cutadapt files using ", cores_to_use, " cores. ",
               "This may take a few minutes...")
 
-      primers_in_cutadapt_reads <- furrr::future_map_dfr(cutadapt_reads_seqs,
-                                                         .f      = multi_primerHits,
-                                                         primers = primers_seqs,
-                                                         .options = furrr::furrr_options(seed = NULL))
+      primers_in_cutadapt_reads <- 
+        furrr::future_map_dfr(cutadapt_reads_seqs,
+                              .f = multi_primerHits,
+                              primers = primers_seqs,
+                              .options = furrr::furrr_options(seed = NULL))
+      
+      tictoc::toc()
       }
 
     # Join with sample metadata and calculate total reads per file
     primers_in_cutadapt_reads <- primers_in_cutadapt_reads %>%
-      dplyr::left_join(cutadapt_check_seqs_tbl, by = "Read file") %>%
+      dplyr::left_join(cutadapt_check_seqs_tbl, 
+                       by = "Read file") %>%
       dplyr::mutate(Read = dplyr::if_else(stringr::str_detect(Stage, "R1"), "R1", "R2")) %>%
-      tidyr::unite(col    = "Unique_File_name_Read",
+      tidyr::unite(col = "Unique_File_name_Read",
                    Unique_File_name,
                    Read,
-                   sep    = " ",
+                   sep = " ",
                    remove = FALSE) %>%
       dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = `Read file`)[, 1])
 
@@ -1223,7 +1237,6 @@ A well-trimmed library should show zero counts in all orientations for all prime
     ```{r}
     # Isolate non-zero residual hits
     residual_hits <- primers_in_cutadapt_reads_long %>%
-    # residual_hits <- primers_in_Nreads_long %>%
       dplyr::filter(Count != 0)
 
     if (nrow(residual_hits) > 0) {
@@ -1304,7 +1317,7 @@ A well-trimmed library should show zero counts in all orientations for all prime
                               scales = "free",
                               space = "free")
         # 4. Save the plot
-        ggplot2::ggsave(file = paste0(results_path, "/", PRJ,
+        ggplot2::ggsave(file = paste0(track_path, "/", PRJ,
                              "-residual_primers_post_cutadapt.pdf"),
                         plot = primers_tile_residual,
                         device = "pdf",
@@ -1313,9 +1326,9 @@ A well-trimmed library should show zero counts in all orientations for all prime
                         units = "cm",
                         limitsize = FALSE,
                         dpi = 600)
-
-        browseURL(paste0(results_path, "/", PRJ,
-                         "-residual_primers_post_cutadapt.pdf"))
+        
+        # 5. Open the plot
+        utils::browseURL(paste0(track_path, "/", PRJ, "-residual_primers_post_cutadapt.pdf"))
       }
 
     } else {
@@ -1401,7 +1414,8 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
      filter_files_per_primer <- cut_files_per_primer %>%
       dplyr::filter(stringr::str_detect(Stage, "_cutadapt")) %>%
       dplyr::filter(file.exists(`Read file`)) %>%
-      tidyr::pivot_wider(id_cols = c("Unique_File_name", 
+      tidyr::pivot_wider(id_cols = c("Project",
+                                     "Unique_File_name", 
                                      "Unique_File_name_Primer",
                                      "Primer", 
                                      "Run"),
@@ -1471,7 +1485,7 @@ The key parameters to adjust for your dataset are:
 
 After filterAndTrim has been applied, this section re-runs FastQC and MultiQC on the filtered output files to confirm that the quality thresholds were effective. Unlike the post-Cutadapt check — which informed the choice of filtering parameters — this step serves as a validation: it verifies that low-quality bases were successfully removed, that read length distributions conform to the expected amplicon size range, and that no systematic artefacts were introduced by truncation.
 
-The read retention summary produced by `filterAndTrim` (all_filtered_summary) should be inspected alongside these reports. A well-calibrated filtering step typically achieves an acceptable read retention rate of 80% to 90% (or higher) of the input reads. If the filtered quality profiles still show a high proportion of low-quality bases, or if the retention rate falls significantly below this acceptable range, return to the filterAndTrim parameters to carefully adjust `maxEE`, `truncLen`, or `minLen` for your specific dataset and marker.
+The read retention summary produced by `filterAndTrim` (pre_filtered_summary) should be inspected alongside these reports. A well-calibrated filtering step typically achieves an acceptable read retention rate of 80% to 90% (or higher) of the input reads. If the filtered quality profiles still show a high proportion of low-quality bases, or if the retention rate falls significantly below this acceptable range, return to the filterAndTrim parameters to carefully adjust `maxEE`, `truncLen`, or `minLen` for your specific dataset and marker.
 
 -   **Check that trimmed files exist.** Confirms that Cutadapt output files exist before running FastQC/MultiQC.
 
@@ -1576,22 +1590,25 @@ With primers removed and low-quality bases filtered out, the reads are ready for
                                                     verbose = TRUE)
       tictoc::toc()
       
-      # Save error plots for quality control review
-      error_plot_path <- file.path(results_path, paste0(seq_run, "_error_rates.pdf"))
       
+      # Error plot R1
       err_plotF <- dada2::plotErrors(err_models_F[[seq_run]], nominalQ = TRUE) + 
         ggplot2::ggtitle(paste("Forward Errors -", seq_run))
         
+      # Error plot R2
       err_plotR <- dada2::plotErrors(err_models_R[[seq_run]], nominalQ = TRUE) + 
         ggplot2::ggtitle(paste("Reverse Errors -", seq_run))
-        
+      
+      # Save error plots for quality control review
+      error_plot_path <- file.path(error_path, paste0(seq_run, "_error_rates.pdf"))
+      
       ggplot2::ggsave(filename = error_plot_path,
                       plot = gridExtra::arrangeGrob(err_plotF, err_plotR, ncol = 2),
                       width = 12, height = 5)
                       
       message(paste0("  Error plots saved to: ", error_plot_path))
       
-      # Open the PDF automatically in the system's default viewer
+      # Open the plot
       utils::browseURL(error_plot_path)
     }
     ```
@@ -1658,12 +1675,22 @@ Following ASV inference, the independently processed forward and reverse reads m
                                        minOverlap = 10,
                                        maxMismatch = 0,
                                        verbose = FALSE)
+      
       # Construct Sequence Table (ASV table)
       mergers_seqtab <- dada2::makeSequenceTable(all_mergers)
+      
       # Check raw ASV length distribution
       message("Amplicon length distribution before chimera removal:")
       table(nchar(dada2::getSequences(mergers_seqtab)))
     }
+    ```
+
+-   **Construct Sequence Table (ASV table) for unmerged reads.** When paired-end reads do not sufficiently overlap to reconstruct the full amplicon, the analysis must proceed with R1 and R2 reads independently, generating separate ASV tables for each read direction.
+
+    ```{r}
+    # Construct Sequence Tables for unmerged reads.
+    R1_seqtab <- dada2::makeSequenceTable(all_dadaFs)
+    R2_seqtab <- dada2::makeSequenceTable(all_dadaRs)
     ```
 
 -   **Remove chimeras.** Identify and remove artifactual sequences formed during PCR amplification when two different biological sequences combine. The `method="consensus"` compares sequences across samples to confidently detect these artifacts.
@@ -1672,24 +1699,62 @@ Following ASV inference, the independently processed forward and reverse reads m
     {
       message("Identifying and removing chimeric sequences...")
       
-      mergers_seqtab_nochim <- dada2::removeBimeraDenovo(mergers_seqtab,
+      mergers_seqtab.nochim <- dada2::removeBimeraDenovo(mergers_seqtab,
                                                          method = "consensus",
                                                          multithread = TRUE,
                                                          verbose = TRUE)
       
       # Calculate chimera removal stats
-      chimera_prop <- base::sum(mergers_seqtab_nochim) / base::sum(mergers_seqtab)
+      chimera_prop <- base::sum(mergers_seqtab.nochim) / base::sum(mergers_seqtab)
       message(paste0("Retained ", base::round(chimera_prop * 100, 2), 
                      "% of reads after chimera removal."))
       
       # Inspect final length distribution
       message("Final Amplicon length distribution (No Chimeras):")
-      table(nchar(dada2::getSequences(mergers_seqtab_nochim)))
+      table(nchar(dada2::getSequences(mergers_seqtab.nochim)))
       
       # Save the final pristine sequence table as an R object to prevent data loss
-      saveRDS(mergers_seqtab_nochim, file = file.path(results_path, "seqtab_nochim.rds"))
-      message("Saved final sequence table to: ", file.path(results_path,
-                                                           "seqtab_nochim.rds"))
+      saveRDS(mergers_seqtab.nochim, file = file.path(nochim_path, "seqtab.nochim.rds"))
+      message("Saved merged final sequence table to: ", file.path(nochim_path,
+                                                                  "seqtab.nochim.rds"))
+    }
+    ```
+
+-   **Remove chimeras (Unmerged reads).** Just as with the merged sequences, the independent R1 and R2 sequence tables may contain chimeric amplicons generated during the PCR amplification steps.
+
+    ```{r}
+    {
+      message("Identifying and removing chimeric sequences from unmerged R1 and R2 reads...")
+      
+      # Remove chimeras from R1
+      R1_seqtab.nochim <- dada2::removeBimeraDenovo(R1_seqtab, 
+                                                  method = "consensus", 
+                                                  multithread = TRUE, 
+                                                  verbose = TRUE)
+      
+      # Calculate chimera removal stats for R1 reads
+      chimera_prop_R1 <- base::sum(R1_seqtab.nochim) / base::sum(R1_seqtab)
+      message(paste0("Retained ", base::round(chimera_prop_R1 * 100, 2), 
+                     "% of R1 reads after chimera removal."))
+      
+      # Save the final pristine sequence table as an R object to prevent data loss
+      saveRDS(R1_seqtab.nochim, file = file.path(nochim_path, "R1_seqtab.nochim.rds"))
+      message("Saved R1 final sequence table to: ", file.path(nochim_path,
+                                                              "R1_seqtab.nochim.rds"))
+
+      # Remove chimeras from R2
+      R2_seqtab.nochim <- dada2::removeBimeraDenovo(R2_seqtab, method = "consensus", 
+                                                  multithread = TRUE, verbose = TRUE)
+      
+      # Calculate chimera removal stats for R2 reads
+      chimera_prop_R2 <- base::sum(R2_seqtab.nochim) / base::sum(R2_seqtab)
+      message(paste0("Retained ", base::round(chimera_prop_R2 * 100, 2), 
+                     "% of R2 reads after chimera removal."))
+      
+      # Save the final pristine sequence table as an R object to prevent data loss
+      saveRDS(R2_seqtab.nochim, file = file.path(nochim_path, "R2_seqtab.nochim.rds"))
+      message("Saved R2 final sequence table to: ", file.path(nochim_path,
+                                                              "R2_seqtab.nochim.rds"))
     }
     ```
 
@@ -1712,20 +1777,16 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
         dplyr::filter(Stage == "FWD_R1") %>%
         dplyr::pull(`Read file`, name = Unique_File_name)
       
-      tbl_Raw <- tibble::enframe(sapply(raw_reads_paths, function(x) ShortRead::countFastq(x)[,1]),
-                                 name = "Unique_File_name",
-                                 value = "Raw reads (pairs)")
-      
       # 3. Extract Cutadapt read counts and build composite key
       # cut_files_per_primer contains Unique_File_name, we use unite() to match the DADA2 outputs
       tbl_Cutadapt <- cut_files_per_primer %>%
         dplyr::filter(Stage == "FWD_R1_cutadapt") %>%
-        dplyr::mutate(`Primer detected reads` = sapply(`Read file`, function(x) ShortRead::countFastq(x)[,1])) %>%
+        dplyr::mutate(`Primer detected reads (pairs)` = sapply(`Read file`, function(x) ShortRead::countFastq(x)[,1])) %>%
         tidyr::unite(col = "Unique_File_name_Primer",
                      Unique_File_name, Primer,
                      sep = "--",
                      remove = FALSE) %>%
-        dplyr::select(Unique_File_name_Primer, Unique_File_name, Primer, `Primer detected reads`)
+        dplyr::select(Unique_File_name_Primer, Unique_File_name, Primer, `Primer detected reads (pairs)`)
       
       # 4. Extract DADA2 sequence steps
       tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN),
@@ -1736,45 +1797,54 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                                          name = "Unique_File_name_Primer", 
                                          value = "Denoised (R2)")
       
-      tbl_Merged      <- tibble::enframe(rowSums(mergers_seqtab),
+      tbl_Merged <- tibble::enframe(rowSums(mergers_seqtab),
                                          name = "Unique_File_name_Primer", 
                                          value = "Merged")
       
-      tbl_NonChim     <- tibble::enframe(rowSums(mergers_seqtab_nochim),
+      tbl_NonChim <- tibble::enframe(rowSums(mergers_seqtab.nochim),
                                          name = "Unique_File_name_Primer", 
                                          value = "Non-chimeric Merged")
       
+      tbl_NonChim_R1 <- tibble::enframe(rowSums(R1_seqtab.nochim), 
+                                      name = "Unique_File_name_Primer", 
+                                      value = "Non-chimeric R1")
+      
+      tbl_NonChim_R2 <- tibble::enframe(rowSums(R2_seqtab.nochim), 
+                                      name = "Unique_File_name_Primer", 
+                                      value = "Non-chimeric R2")
+      
       # 5. Combine all tracking metrics into a single cohesive table
-      # We start with tbl_Cutadapt because it natively holds the mapped Unique_File_name and Primer info
       all_track <- list(tbl_Cutadapt,
-                        all_filtered_summary %>% dplyr::select(Unique_File_name_Primer, `Filtered reads (pairs)`),
                         tbl_Denoised_R1,
                         tbl_Denoised_R2,
                         tbl_Merged,
-                        tbl_NonChim) %>%
-      purrr::reduce(dplyr::left_join, by = "Unique_File_name_Primer") %>%
-      # Join with RAW reads via Unique_File_name
-      dplyr::left_join(tbl_Raw, by = "Unique_File_name") %>%
-      # Join with original configuration metadata
-      dplyr::left_join(primers_n_samples, by = c("Unique_File_name", "Primer")) %>%
-      # Reorder columns logically to match the sequence of events
-      dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer) %>%
-      dplyr::relocate(`Raw reads (pairs)`, .before = `Primer detected reads`)
+                        tbl_NonChim,
+                        tbl_NonChim_R1, 
+                        tbl_NonChim_R2) %>%
+        purrr::reduce(dplyr::left_join, by = "Unique_File_name_Primer") %>%
+        dplyr::left_join(pre_filtered_summary, by = "Unique_File_name") %>%
+        # Join with original configuration metadata
+        dplyr::left_join(primers_n_samples, by = c("Unique_File_name", "Primer")) %>%
+        # Reorder columns logically to match the sequence of events
+        dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer) %>%
+        dplyr::relocate(`Raw reads (pairs)`, .before = `Primer detected reads (pairs)`)
       
       # Show preview
       all_track %>%
-      dplyr::select(Unique_File_name_Primer, 
+      dplyr::select(Unique_File_name, 
                     `Raw reads (pairs)`, 
-                    `Primer detected reads`,
-                    `Filtered reads (pairs)`, 
+                    `Primer detected reads (pairs)`,
+                    `Pre-Filtered reads (pairs)`, 
                     `Denoised (R1)`,
                     `Denoised (R2)`,
-                    `Non-chimeric Merged`) %>%
+                    `Non-chimeric Merged`,
+                    `Non-chimeric R1`,
+                    `Non-chimeric R2`) %>%
       View()
     }
     ```
 
--   **Save metrics to Excel.** Export the aggregated tracking table to individual Excel spreadsheets for project-specific reporting and external auditing.
+-   **Save metrics to sheet.** Export the aggregated tracking table to individual spreadsheets for project-specific reporting and external auditing.
 
     ```{r}
     {
@@ -1783,13 +1853,10 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
         prj_track <- all_track %>%
           dplyr::filter(Project == PRJ)
         
-        output_excel <- file.path(results_path,
-                                  paste0(PRJ,
-                                         "-reads_and_seqs_counts-",
-                                         Sys.Date(),
-                                         ".xlsx"))
+        output_file <- file.path(tables_path, paste0(PRJ, "-reads_and_seqs_counts-",
+                                                     Sys.Date(), ".csv"))
         
-        writexl::write_xlsx(prj_track, path = output_excel)
+        readr::write_csv(prj_track, file = output_file)
         }
 
       message("✓ Saved read tracking metrics to datasheet file.")
@@ -1804,15 +1871,15 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
       tidyr::gather(key = "Stage", 
                     value = "Read counts",
                     "Raw reads (pairs)",
-                    "Primer detected reads",
-                    "Filtered reads (pairs)", 
+                    "Primer detected reads (pairs)",
+                    "Pre-Filtered reads (pairs)", 
                     "Denoised (R1)",
                     "Denoised (R2)",
                     "Merged",
                     "Non-chimeric Merged") %>%
       dplyr::mutate(Stage = factor(Stage, levels = c("Raw reads (pairs)",
-                                                     "Primer detected reads",
-                                                     "Filtered reads (pairs)", 
+                                                     "Primer detected reads (pairs)",
+                                                     "Pre-Filtered reads (pairs)", 
                                                      "Denoised (R1)",
                                                      "Denoised (R2)",
                                                      "Merged",
@@ -1867,7 +1934,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                       
       message(paste0("  Saved tracking plot for ", PRJ, ": ", basename(plot_file)))
       
-      # Open the PDF automatically in the system's default viewer
+      # Open the plot
       utils::browseURL(plot_file)
     }
     ```
@@ -1925,9 +1992,9 @@ Before creating the Phyloseq object, the sample metadata table must be formatted
 
 -   **Check sample consistency.** Verify if all sequences in the ASV table have matching metadata in the newly created sample dataframe.
 
-```{r}
+    ```{r}
     # Check consistency between sequence table and metadata
-    seq_names <- rownames(mergers_seqtab_nochim)
+    seq_names <- rownames(mergers_seqtab.nochim)
     meta_names <- rownames(all_samdf)
 
     if (!all(seq_names %in% meta_names)) {
@@ -1936,7 +2003,7 @@ Before creating the Phyloseq object, the sample metadata table must be formatted
     } else {
       message("All samples matched correctly between Sequence Table and Metadata.")
     }
-```
+    ```
 
 ### Bulid and format the Phyloseq Object
 
@@ -1946,25 +2013,20 @@ With validated metadata in hand, the ASV abundance table and sample data are com
 
     ```{r}
     # Create Phyloseq object from DADA2 merged results
-    mergers_ps <- phyloseq::phyloseq(
-      phyloseq::otu_table(mergers_seqtab_nochim, 
-                          taxa_are_rows = FALSE),
-      phyloseq::sample_data(all_samdf)
-      # phyloseq::tax_table(taxa_matrix) # Omitted: Taxonomy will be assigned later via BLASTr
-      )
-    
+    mergers_ps <- phyloseq::phyloseq(phyloseq::otu_table(mergers_seqtab.nochim,
+                                                         taxa_are_rows = FALSE),
+                                     phyloseq::sample_data(all_samdf))
+
     #  Unmerged workflow
-    # Create Phyloseq object from DADA2 unmerged R1 reads 
-    # R1_ps <- phyloseq::phyloseq(phyloseq::otu_table(R1_seqtab.nochim, 
-    #                                                 taxa_are_rows = FALSE),
-    #                             phyloseq::sample_data(samdf),
-    #                             phyloseq::tax_table(R1_taxa$tax))
-    
     # Create Phyloseq object from DADA2 unmerged R1 reads
-    # R2_ps <- phyloseq::phyloseq(phyloseq::otu_table(R2_seqtab.nochim, 
-    #                                                 taxa_are_rows = FALSE),
-    #                             phyloseq::sample_data(samdf),
-    #                             phyloseq::tax_table(R2_taxa$tax))
+    R1_ps <- phyloseq::phyloseq(phyloseq::otu_table(R1_seqtab.nochim,
+                                                    taxa_are_rows = FALSE),
+                                phyloseq::sample_data(all_samdf))
+
+    # Create Phyloseq object from DADA2 unmerged R1 reads
+    R2_ps <- phyloseq::phyloseq(phyloseq::otu_table(R2_seqtab.nochim,
+                                                    taxa_are_rows = FALSE),
+                                phyloseq::sample_data(all_samdf))
     ```
 
 -   **Transform to tidy format.** Convert the Phyloseq object into a long-format dataframe (`psmelt`), filtering out zero-abundance ASVs to optimize memory usage and downstream processing.
@@ -1977,7 +2039,7 @@ With validated metadata in hand, the ASV abundance table and sample data are com
       dplyr::mutate(`Read origin` = "merged") %>%
       dplyr::filter(Abundance > 0) %>% # Filter strictly positive abundance
       dplyr::rename(`ASV sequence` = OTU) # Keep ASV sequence as identifier
-    
+
     # Unmerged workflow
     # R1 reads data
     # R1_ps_tbl <- phyloseq::psmelt(R1_ps) %>%
@@ -1986,7 +2048,7 @@ With validated metadata in hand, the ASV abundance table and sample data are com
     #   filter(Abundance >=1) %>%
     #   mutate("ASV tip" = OTU) %>%
     #   dplyr::rename("ASV" = "OTU")
-    
+
     # R2 reads data
     # R2_ps_tbl <- phyloseq::psmelt(R2_ps) %>%
     #   as_tibble() %>%
@@ -1994,7 +2056,6 @@ With validated metadata in hand, the ASV abundance table and sample data are com
     #   filter(Abundance >=1) %>%
     #   mutate("ASV tip" = OTU) %>%
     #   dplyr::rename("ASV" = "OTU")
-    
     ```
 
 -   **Standardize combined table.** Standardize column names and calculate the length of each ASV for plotting.
@@ -2006,7 +2067,7 @@ With validated metadata in hand, the ASV abundance table and sample data are com
       dplyr::select(-Sample) %>%  # Remove duplicate/confusing columns if necessary
       dplyr::rename(Sample = sample_Sample) %>% # Standardize Sample column name
       dplyr::mutate(`ASV Size (bp)` = nchar(`ASV sequence`))
-    
+
     # Show table
     View(all_ps_tbl)
     ```
@@ -2037,7 +2098,7 @@ With validated metadata in hand, the ASV abundance table and sample data are com
                       Relative_Abundance_Dataset, 
                       Relative_Abundance_Sample, 
                       .after = Abundance)
-    
+
     # Show table
     View(all_ps_tbl)
     ```
@@ -2059,10 +2120,10 @@ Before proceeding to taxonomic assignment, it is important to verify that the in
                                    size = Relative_Abundance_Sample,
                                    alpha = 0.25)) +
       ggplot2::geom_jitter(height = 0.3, width = 0.3) +
-      ggplot2::scale_x_continuous(breaks = seq(20, 
-                                               max(all_ps_tbl$`ASV Size (bp)`, 
-                                                   na.rm = TRUE), 10),
-                                  expand = c(0.02, 0.02)) +
+      # ggplot2::scale_x_continuous(breaks = seq(20, 
+      #                                          max(all_ps_tbl$`ASV Size (bp)`, 
+      #                                              na.rm = TRUE), 10),
+      #                             expand = c(0.02, 0.02)) +
       ggplot2::scale_fill_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
       ggplot2::scale_colour_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
       ggplot2::labs(x = "ASV Size (bp)",
@@ -2073,11 +2134,11 @@ Before proceeding to taxonomic assignment, it is important to verify that the in
       ggplot2::theme(legend.position = "right",
                      axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
                      strip.text.y = ggplot2::element_text(size = 10, angle = 0)) +
-      ggplot2::geom_vline(xintercept = c(10, max(all_ps_tbl$`ASV Size (bp)`, 
-                                                 na.rm = TRUE))) +
+      # ggplot2::geom_vline(xintercept = c(10, max(all_ps_tbl$`ASV Size (bp)`, 
+      #                                            na.rm = TRUE))) +
       ggplot2::facet_grid(rows = ggplot2::vars(Project, 
-                                               Primer, 
                                                Type),
+                          cols = ggplot2::vars(Primer),
                           scales = "free_y",
                           space = "free_y")
 
@@ -2091,7 +2152,7 @@ Before proceeding to taxonomic assignment, it is important to verify that the in
                     units = "cm",
                     dpi = 600)
 
-    # Open the PDF automatically in the system's default viewer
+    # Open the plot
       utils::browseURL(file.path(figs_path, "ASV_length_distribution-PreBLAST.pdf"))
     ```
 
