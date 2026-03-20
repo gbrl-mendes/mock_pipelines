@@ -250,7 +250,7 @@ After filling in the table, save it as .csv an place it on the data folder, insi
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "1_setup_n_configuration-", Sys.Date()))
@@ -802,7 +802,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:
 
     | Primer  | R1                                       | R2                                       |
-    |:----------------|:--------------------------|:--------------------------|
+    |:-----------------|:--------------------------|:--------------------------|
     | **FWD** | **Forward** (good, 5' start of R1)       | **RevComp** (read-through, 3' end of R2) |
     | **REV** | **RevComp** (read-through, 3' end of R1) | **Forward** (good, 5' start of R2)       |
 
@@ -825,17 +825,17 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     **Troubleshooting: diagnosing orientation anomalies.**
 
-    | Pattern observed in the plot                                                                 | Likely cause                                                                                                | Recommended fix                                                                                                                                                   |
+    | Pattern observed in the plot                                                                 | Likely cause                                                                                                | Recommended fix                                                                                                                                               |
     |:------------------|:---------------------|:------------------------------|
-    | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                                 |
-    | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                           |
-    | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                           |
-    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual Cutadapt strategy described above \[\^2\]                                                   |
+    | FWD in R2/**Forward** (strong); REV in R1/**Forward** (strong)                               | R1/R2 file paths are swapped, or FWD/REV primer definitions are swapped in `primersnsamples`                | Swap R1↔R2 path assignments in `sampleidxtbl`, or swap FWD and REV primer entries                                                                             |
+    | FWD in R1/**RevComp** (strong); REV in R2/**RevComp** (strong); near-zero **Forward** signal | Both primer sequences were entered in reverse-complement direction (e.g., copied from the antisense strand) | Replace both: `FWD <-     FWD.orient[["RevComp"]]` and `REV <- REV.orient[["RevComp"]]`                                                                       |
+    | REV in R2/**RevComp** instead of R2/**Forward** (FWD signal looks correct)                   | REV primer sequence was entered as its own reverse complement                                               | Replace: `REV <-     REV.orient[["RevComp"]]` before proceeding \[\^1\]                                                                                       |
+    | FWD and REV in both R1/**Forward** and R2/**Forward** in roughly equal proportions           | Mixed orientation library                                                                                   | Use `vsearch --orient`, `removePrimers(orient = TRUE)`, or the dual Cutadapt strategy described above \[\^2\]                                                 |
     | No primer detected in any orientation in any file                                            | Wrong primer pair selected; reads are already pre-trimmed; mismatches \> 1; incorrect file paths            | Verify primer sequences against the wet-lab protocol; confirm reads are not pre-trimmed (check FastQC/MultiQC report); increase `max.mismatch` to 2 as a test |
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "2_raw_data_pre_processing-", Sys.Date()))
@@ -1064,7 +1064,8 @@ The Cutadapt software (DOI:10.14806/ej.17.1.200) is used to remove primer sequen
       # Filter samples belonging to this primer set and pivot to wide format
       PRIMER_SET_files <- cut_files_per_primer %>%
         dplyr::filter(stringr::str_detect(Primer, PRIMER_SET)) %>%
-        tidyr::pivot_wider(id_cols = c("Unique_File_name", "Unique_File_name_Primer"),
+        tidyr::pivot_wider(id_cols = c("Unique_File_name", 
+                                       "Unique_File_name_Primer"),
                            names_from  = "Stage",
                            values_from = "Read file")
 
@@ -1423,47 +1424,47 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
 
 The key parameters to adjust for your dataset are:
 
-    -   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
+-   `maxEE`: Maximum number of expected errors tolerated per read. Lower values (e.g., c(2, 2)) are more stringent and recommended as a starting point. If read retention drops below \~70%, consider relaxing to c(2, 5) for the reverse read, which typically shows steeper quality decay.
 
-    -   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
+-   `truncQ`: Truncates the read at the first base with a Phred quality score ≤ this value. The default of 2 effectively removes reads with untrustworthy terminal bases.
 
-    -   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
+-   `minLen`: Discards reads shorter than this threshold after trimming. Set according to the minimum expected amplicon length for your marker (e.g., 100 for MiFish/NeoFish 12S amplicons).
 
-    -   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your Cutadapt output files to decide.
+-   `truncLen`: Truncates all reads to a fixed length. Useful for markers with predictable amplicon sizes when quality degrades before the end of the read. Leave unset (or set to 0) for variable-length amplicons. Inspect `dada2::plotQualityProfile()` on your Cutadapt output files to decide.
 
-    -   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
+-   `matchIDs`: Ensures that the sequence IDs of R1 and R2 exactly match, discarding pairs that have become unsynchronized during upstream processing.
 
-    -   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
+-   `rm.phix`: Removes reads matching the PhiX bacteriophage genome, a standard Illumina sequencing control that can contaminate libraries.
 
     ```{r}
-# Calculate number of samples and files being processed
-n_samples <- length(filter_files_per_primer$Unique_File_name)
+    # Calculate number of samples and files being processed
+    n_samples <- length(filter_files_per_primer$Unique_File_name)
 
-n_files <- length(filter_files_per_primer$FWD_R1_filtered) + 
-  length(filter_files_per_primer$FWD_R2_filtered)
+    n_files <- length(filter_files_per_primer$FWD_R1_filtered) + 
+      length(filter_files_per_primer$FWD_R2_filtered)
 
-# Run filtering in parallel across all read pairs
-{
-  message("Filtering ", n_files, " files from ", n_samples, " samples. This may take a few minutes...")
-  
-  tictoc::tic()
-  
-  sample_filtered_out <- dada2::filterAndTrim(fwd = filter_files_per_primer$FWD_R1_cutadapt,
-                                          filt = filter_files_per_primer$FWD_R1_filtered,
-                                          rev = filter_files_per_primer$FWD_R2_cutadapt,
-                                          filt.rev = filter_files_per_primer$FWD_R2_filtered,
-                                          maxEE = c(2, 2),
-                                          truncQ = 2,
-                                          minLen = 100,
-                                          matchIDs = TRUE,
-                                          rm.phix = TRUE,
-                                          # truncLen = c(0, 0),
-                                          multithread = TRUE,
-                                          compress = TRUE,
-                                          verbose = TRUE
-                                          )
-  tictoc::toc()
-}
+    # Run filtering in parallel across all read pairs
+    {
+      message("Filtering ", n_files, " files from ", n_samples, " samples. This may take a few minutes...")
+      
+      tictoc::tic()
+      
+      sample_filtered_out <- 
+        dada2::filterAndTrim(fwd = filter_files_per_primer$FWD_R1_cutadapt,
+                             filt = filter_files_per_primer$FWD_R1_filtered,
+                             rev = filter_files_per_primer$FWD_R2_cutadapt,
+                             filt.rev = filter_files_per_primer$FWD_R2_filtered,
+                             maxEE = c(2, 2),
+                             truncQ = 2,
+                             minLen = 100,
+                             matchIDs = TRUE,
+                             rm.phix = TRUE,
+                             # truncLen = c(0, 0),
+                             multithread = TRUE,
+                             compress = TRUE,
+                             verbose = TRUE)
+      tictoc::toc()
+    }
     ```
 
 #### Quality checking post-filtering
@@ -1637,7 +1638,7 @@ With primers removed and low-quality bases filtered out, the reads are ready for
       all_derep_forward <- append(all_derep_forward, seq_derep_forward)
       all_derep_reverse <- append(all_derep_reverse, seq_derep_reverse)
     }
-    
+
     message("ASV Inference Complete across all runs.")
     ```
 
@@ -1696,7 +1697,7 @@ Following ASV inference, the independently processed forward and reverse reads m
 
 A fundamental quality control practice in metabarcoding is monitoring the proportion of reads that successfully survive each step of the bioinformatic pipeline. Extreme drops in read counts at specific stages often indicate technical issues. For instance, massive losses during the initial filtering step may point to poor sequencing quality or overly aggressive truncation parameters, whereas massive losses during the merging step usually indicate that the reads are too short to properly overlap (e.g., severe read-through or improper size selection). This section aggregates the sequence retention metrics from raw inputs through the final chimera removal, generating a comprehensive diagnostic table for auditing and reporting.
 
--   **Compile statistics.** Gather read counts from every processing step (Raw/Cutadapt -> Filtered -> Denoised -> Merged -> Non-chimeric) to assess pipeline quality and detect samples where massive data loss occurred.
+-   **Compile statistics.** Gather read counts from every processing step (Raw/Cutadapt → Filtered → Denoised → Merged → Non-chimeric) to assess pipeline quality and detect samples where massive data loss ocurred.
 
     ```{r}
     {
@@ -1790,7 +1791,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
         
         writexl::write_xlsx(prj_track, path = output_excel)
         }
-    
+
       message("✓ Saved read tracking metrics to datasheet file.")
     }
     ```
@@ -1818,7 +1819,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                                                      "Non-chimeric Merged"))) 
       
     options(scipen = 22)
-    
+
     # Define a clean Viridis palette explicitly mapping to our 7 stages
     stage_colors <- viridis::turbo(n = 7, direction = -1)
 
@@ -1873,47 +1874,61 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "3_DADA2_worflow-", Sys.Date()))
     ```
 
-## 4. Phyloseq Integration (ou Downstream Analysis?)
+## 4. Phyloseq Integration & Data Structuring
 
-### Generate Sample Metadata
+Once ASVs are inferred and chimeras removed, the sequence counts must be integrated with the experimental metadata. In this section, we use the Phyloseq package to merge these different data types into a cohesive structure. Subsequently, we 'melt' this object into a tidy, long-format dataframe, calculate relative abundances, and visualize the ASV length distribution to assess data integrity prior to taxonomic assignment.
 
--   **Format metadata table.** Prepare the sample metadata by organizing identifiers and ensuring row names match the sequence table, a requirement for Phyloseq.
+### Prepare Sample Metadata
+
+Before creating the Phyloseq object, the sample metadata table must be formatted so that its row names exactly match the sample IDs of the DADA2 ASV sequence table. This code extracts the relevant columns from the configuration table, expands rows for samples with multiple primers, and validates the match between the two tables.
+
+-   **Format metadata table.** Prepare the sample metadata by organizing identifiers and ensuring row names exactly match the sample names in the sequence table, a requirement for Phyloseq.
 
     ```{r}
-    # Create sample metadata dataframe for Phyloseq
-    samdf <- primers_n_samples %>% 
-      dplyr::select(
-    Project, Sample, Researcher, Unique_File_name, Primer, Lib, Type,
-    dplyr::starts_with("Metadata"),
-    obs, `Extraction control`, `PCR control`, `Filtration control`
-      ) %>% 
+    # Create sample metadata dataframe for Phylose
+    # Attention! Add other metadata columns if needed
+    all_samdf <- primers_n_samples %>% 
+      dplyr::select("Project",
+                    "Sample",
+                    # "Researcher",
+                    # "Analysis",
+                    "Unique_File_name",
+                    "Primer",
+                    "Lib",
+                    "Type",
+                    # starts_with("Metadata"),
+                    # "obs",
+                    # "Extraction control",
+                    # "Filtration control",
+                    # "PCR control"
+                    ) %>% 
       BiocGenerics::unique() %>%
       # Expand rows if multiple primers exist per sample (semi-colon separated)
-      tidyr::separate_longer_delim(cols = Primer, delim = ";") %>% 
+      tidyr::separate_longer_delim(cols = Primer, delim = ";") %>%
       # Create unique identifier combining file name and primer
-      tidyr::unite(
-    col = "Unique_File_name_Primer", 
-    Unique_File_name, Primer, 
-    sep = "--", 
-    remove = FALSE
-      ) %>%
+      tidyr::unite(col = "Unique_File_name_Primer",
+                   Unique_File_name, 
+                   Primer,
+                   sep = "--",
+                   remove = FALSE) %>%
       as.data.frame()
 
     # Assign row names to match ASV table dimensions
-    rownames(samdf) <- samdf$Unique_File_name_Primer
+    rownames(all_samdf) <- all_samdf$Unique_File_name_Primer
+    ```
 
-    # Optional: Preview metadata structure
-    # str(samdf)
+-   **Check sample consistency.** Verify if all sequences in the ASV table have matching metadata in the newly created sample dataframe.
 
+```{r}
     # Check consistency between sequence table and metadata
     seq_names <- rownames(mergers_seqtab_nochim)
-    meta_names <- rownames(samdf)
+    meta_names <- rownames(all_samdf)
 
     if (!all(seq_names %in% meta_names)) {
       warning("Caution: Some samples in the sequence table are missing from metadata!")
@@ -1921,130 +1936,171 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
     } else {
       message("All samples matched correctly between Sequence Table and Metadata.")
     }
-    ```
+```
 
-### Create Phyloseq Objects
+### Bulid and format the Phyloseq Object
 
--   **Import DADA2 results.** Combine the ASV table (no-chimera) and the formatted sample data into a Phyloseq object.
+With validated metadata in hand, the ASV abundance table and sample data are combined into a single Phyloseq object. That object is then melted into a long-format tibble, column names are standardized, and relative abundances are calculated to allow fair comparisons across samples with unequal sequencing depths.
+
+-   **Import DADA2 results.** Combine the ASV abundance table and the formatted sample metadata into a unified Phyloseq object.
 
     ```{r}
-    # Create Phyloseq object from DADA2 results
-    # Note: 'mergers_seqtab_nochim' comes from the DADA2 workflow section
+    # Create Phyloseq object from DADA2 merged results
     mergers_ps <- phyloseq::phyloseq(
-      phyloseq::otu_table(mergers_seqtab_nochim, taxa_are_rows = FALSE),
-      phyloseq::sample_data(samdf)
-      # phyloseq::tax_table(taxa_matrix) # Add taxonomy here if available later
-    )
-
-    # If concatenation was used (optional workflow branch), creating its object:
-    # concat_ps <- phyloseq::phyloseq(
-    #   phyloseq::otu_table(concat_seqtab_nochim, taxa_are_rows = FALSE),
-    #   phyloseq::sample_data(samdf)
-    # )
+      phyloseq::otu_table(mergers_seqtab_nochim, 
+                          taxa_are_rows = FALSE),
+      phyloseq::sample_data(all_samdf)
+      # phyloseq::tax_table(taxa_matrix) # Omitted: Taxonomy will be assigned later via BLASTr
+      )
+    
+    #  Unmerged workflow
+    # Create Phyloseq object from DADA2 unmerged R1 reads 
+    # R1_ps <- phyloseq::phyloseq(phyloseq::otu_table(R1_seqtab.nochim, 
+    #                                                 taxa_are_rows = FALSE),
+    #                             phyloseq::sample_data(samdf),
+    #                             phyloseq::tax_table(R1_taxa$tax))
+    
+    # Create Phyloseq object from DADA2 unmerged R1 reads
+    # R2_ps <- phyloseq::phyloseq(phyloseq::otu_table(R2_seqtab.nochim, 
+    #                                                 taxa_are_rows = FALSE),
+    #                             phyloseq::sample_data(samdf),
+    #                             phyloseq::tax_table(R2_taxa$tax))
     ```
 
-### Melt and Combine for Visualization
-
--   **Transform to tidy format.** Convert the Phyloseq object into a long-format tibble (psmelt), filtering out zero-abundance ASVs to optimize file size and plotting performance.
+-   **Transform to tidy format.** Convert the Phyloseq object into a long-format dataframe (`psmelt`), filtering out zero-abundance ASVs to optimize memory usage and downstream processing.
 
     ```{r}
     # Convert Phyloseq object to long tibble
-    mergers_ps_tbl <- phyloseq::psmelt(mergers_ps) %>% 
-      tibble::as_tibble() %>% 
-      dplyr::mutate(`Read origin` = "merged") %>% 
+    # For merged data
+    mergers_ps_tbl <- phyloseq::psmelt(mergers_ps) %>%
+      tibble::as_tibble() %>%
+      dplyr::mutate(`Read origin` = "merged") %>%
       dplyr::filter(Abundance > 0) %>% # Filter strictly positive abundance
-      dplyr::rename(ASV = OTU, ASV_tip = OTU) # Keep ASV sequence as identifier
-
-    # (Optional) Process concatenated data if it exists
-    # concat_ps_tbl <- ...
-
-    # Combine all processed tables (if multiple sources exist) ----
-    all_ps_tbl <- mergers_ps_tbl %>%
-      # dplyr::bind_rows(concat_ps_tbl) %>% # Uncomment to join multiple sources
-      dplyr::select(-Sample) %>%  # Remove duplicate/confusing columns if necessary
-      dplyr::rename(Sample = sample_Sample) %>% # Standardize Sample column name
-      dplyr::mutate(`ASV Size (bp)` = nchar(ASV))
-
-    # View final tidy table
-    # head(all_ps_tbl)
+      dplyr::rename(`ASV sequence` = OTU) # Keep ASV sequence as identifier
+    
+    # Unmerged workflow
+    # R1 reads data
+    # R1_ps_tbl <- phyloseq::psmelt(R1_ps) %>%
+    #   as_tibble() %>%
+    #   mutate(`Read origin` = "R1") %>%
+    #   filter(Abundance >=1) %>%
+    #   mutate("ASV tip" = OTU) %>%
+    #   dplyr::rename("ASV" = "OTU")
+    
+    # R2 reads data
+    # R2_ps_tbl <- phyloseq::psmelt(R2_ps) %>%
+    #   as_tibble() %>%
+    #   mutate(`Read origin` = "R2") %>%
+    #   filter(Abundance >=1) %>%
+    #   mutate("ASV tip" = OTU) %>%
+    #   dplyr::rename("ASV" = "OTU")
+    
     ```
 
-### Calculate Relative Abundances
+-   **Standardize combined table.** Standardize column names and calculate the length of each ASV for plotting.
 
--   **Compute relative abundances.** Calculate the proportion of each ASV relative to the total library size and the total dataset. This normalization is crucial for comparing samples with unequal sequencing depths.
+    ```{r}
+    # Combine all processed tables (if multiple sources exist)
+    all_ps_tbl <- mergers_ps_tbl %>%
+      # dplyr::bind_rows(R1_ps_tbl, R2_ps_tbl) %>% 
+      dplyr::select(-Sample) %>%  # Remove duplicate/confusing columns if necessary
+      dplyr::rename(Sample = sample_Sample) %>% # Standardize Sample column name
+      dplyr::mutate(`ASV Size (bp)` = nchar(`ASV sequence`))
+    
+    # Show table
+    View(all_ps_tbl)
+    ```
 
-    ```{r, echo=TRUE, eval=FALSE}
-    # Calculate relative abundances per sample and project
+-   **Compute relative abundances.** Calculate the proportion of each ASV relative to the sample's total library size and the overall dataset, enabling fair comparisons across libraries with unequal sequencing depths.
+
+    ```{r}
+    # Calculate relative abundances per sample and dataset
     all_ps_tbl <- all_ps_tbl %>%
       # Calculate Total Abundance of the entire dataset once
       dplyr::mutate(Dataset_Total_Abundance = sum(Abundance)) %>%
       # Group by sample context to calculate sample-specific totals
-      dplyr::group_by(Project, Unique_File_name, Primer, `Read origin`) %>%
-      dplyr::mutate(
-    Sample_Total_Abundance = sum(Abundance),
-    Relative_Abundance_Dataset = round((Abundance / Dataset_Total_Abundance), digits = 6),
-    Relative_Abundance_Sample  = round((Abundance / Sample_Total_Abundance), digits = 6)
-      ) %>%
+      dplyr::group_by(Project, 
+                      Unique_File_name, 
+                      Primer, 
+                      `Read origin`) %>%
+      dplyr::mutate(Sample_Total_Abundance = sum(Abundance),
+                    Relative_Abundance_Dataset = round((Abundance /
+                                                        Dataset_Total_Abundance),
+                                                        digits = 6),
+        Relative_Abundance_Sample  = round((Abundance / 
+                                            Sample_Total_Abundance), 
+                                            digits = 6)) %>%
       dplyr::ungroup() %>%
-      # Clean up temporary total column if desired, or keep for checks
+      # Clean up temporary total column
       dplyr::select(-Dataset_Total_Abundance) %>%
-      dplyr::relocate(Sample_Total_Abundance, Relative_Abundance_Dataset, Relative_Abundance_Sample, .after = Abundance)
+      dplyr::relocate(Sample_Total_Abundance, 
+                      Relative_Abundance_Dataset, 
+                      Relative_Abundance_Sample, 
+                      .after = Abundance)
+    
+    # Show table
+    View(all_ps_tbl)
     ```
 
 ### Check ASV Length Distribution
 
--   **Visualize ASV lengths.** Inspect the distribution of ASV lengths before taxonomic assignment. This helps identify potential artifacts or non-target amplicons.
+Before proceeding to taxonomic assignment, it is important to verify that the inferred ASVs fall within the expected size range for the target amplicon. The plot below displays ASV lengths across all samples, coloured by read origin and scaled by relative abundance, making it straightforward to spot outliers, unexpected size classes, or potential non-target amplicons.
 
-    ```{r, echo=TRUE, eval=FALSE}
-    # Plot ASV length distribution by sample
-    # Define color palette if not already defined globally
-    # viridis_pal <- viridis::turbo(n = 12)
-
-    asv_length_plot <- all_ps_tbl %>%
-      ggplot2::ggplot(aes(
-    y = interaction(`Read origin`, Unique_File_name),
-    x = `ASV Size (bp)`,
-    fill = `Read origin`,
-    col = `Read origin`,
-    size = Relative_Abundance_Sample,
-    alpha = 0.25
-      )) +
-      ggplot2::geom_jitter(height = 0.3, width = 0.3) +
-      ggplot2::scale_x_continuous(
-    breaks = seq(20, max(all_ps_tbl$`ASV Size (bp)`, na.rm = TRUE), 10),
-    expand = c(0.02, 0.02)
-      ) +
-      ggplot2::scale_fill_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
-      ggplot2::scale_colour_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
-      ggplot2::labs(
-    x = "ASV Size (bp)",
-    y = "Sample",
-    title = "ASV Length Distribution by Sample",
-    subtitle = "Size and Read Origin per Sample (all identified ASVs)"
-      ) +
-      ggplot2::theme_bw(base_size = 8) +
-      ggplot2::theme(
-    legend.position = "right",
-    axis.text.x = element_text(angle = 45, hjust = 1),
-    strip.text.y = element_text(size = 10, angle = 0)
-      ) +
-      ggplot2::geom_vline(xintercept = c(10, max(all_ps_tbl$`ASV Size (bp)`, na.rm = TRUE))) +
-      ggplot2::facet_grid(
-    rows = vars(Project, Primer, Type),
-    scales = 'free_y', 
-    space = 'free_y'
-      )
-
-    # Save plot
-    # ggsave(...) # Add your ggsave logic here as needed
-    ```
-
-### Save the Environment!
-
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Visualize ASV lengths.** Plot the distribution of ASV sequence lengths prior to BLASTn identification. This diagnostic step helps flag unexpected size distributions or potential non-target amplicons.
 
     ```{r}
-    base::save.image(paste0(env_path, "/", "4_phyloseq-", Sys.Date()))
+    # Plot ASV length distribution by sample
+    asv_length_plot <- all_ps_tbl %>%
+      ggplot2::ggplot(ggplot2::aes(y = interaction(`Read origin`, 
+                                                   Unique_File_name),
+                                   x = `ASV Size (bp)`,
+                                   fill = `Read origin`,
+                                   col = `Read origin`,
+                                   size = Relative_Abundance_Sample,
+                                   alpha = 0.25)) +
+      ggplot2::geom_jitter(height = 0.3, width = 0.3) +
+      ggplot2::scale_x_continuous(breaks = seq(20, 
+                                               max(all_ps_tbl$`ASV Size (bp)`, 
+                                                   na.rm = TRUE), 10),
+                                  expand = c(0.02, 0.02)) +
+      ggplot2::scale_fill_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
+      ggplot2::scale_colour_manual(values = viridis::turbo(n = 12)[c(3, 6, 9, 12)]) +
+      ggplot2::labs(x = "ASV Size (bp)",
+                    y = "Sample",
+                    title = "ASV Length Distribution by Sample",
+                    subtitle = "Size and Read Origin per Sample (all inferred ASVs)") +
+      ggplot2::theme_bw(base_size = 8) +
+      ggplot2::theme(legend.position = "right",
+                     axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+                     strip.text.y = ggplot2::element_text(size = 10, angle = 0)) +
+      ggplot2::geom_vline(xintercept = c(10, max(all_ps_tbl$`ASV Size (bp)`, 
+                                                 na.rm = TRUE))) +
+      ggplot2::facet_grid(rows = ggplot2::vars(Project, 
+                                               Primer, 
+                                               Type),
+                          scales = "free_y",
+                          space = "free_y")
+
+    # Save plot
+    ggplot2::ggsave(filename = file.path(figs_path, 
+                                         "ASV_length_distribution-PreBLAST.pdf"),
+                    plot = asv_length_plot,
+                    device = "pdf",
+                    width = 25,
+                    height = 30,
+                    units = "cm",
+                    dpi = 600)
+
+    # Open the PDF automatically in the system's default viewer
+      utils::browseURL(file.path(figs_path, "ASV_length_distribution-PreBLAST.pdf"))
+    ```
+
+### Save the Environment
+
+-   **Store the objects.** Save all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+
+    ```{r}
+    base::save.image(paste0(env_path, "/", "4_phyloseq_integration-", Sys.Date(), ".RData"))
     ```
 
 ## 5. Taxonomic Assignment (BLASTn)
@@ -2161,7 +2217,7 @@ This section performs taxonomic identification of ASVs using local BLAST databas
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "5_Taxonomic_assignment-", Sys.Date()))
@@ -2338,7 +2394,7 @@ This section refines the raw BLAST results, retrieves complete lineage informati
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "6_Taxonomic_curation-", Sys.Date()))
@@ -2447,7 +2503,7 @@ This section identifies potential contaminant ASVs by comparing their abundance 
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "7_Contamination_analysis-", Sys.Date()))
@@ -2541,7 +2597,7 @@ This section generates plots to visualize the distribution of all identified ASV
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "8_Final_visualization-", Sys.Date()))
@@ -2682,7 +2738,7 @@ This section refines the identification confidence levels and categorizes organi
 
 ### Save the Environment!
 
--   **Save the environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
+-   **Save the R environment.** Stores all objects and variables created in this section so you can reload them later if the pipeline fails or you need to resume from this point.
 
     ```{r}
     base::save.image(paste0(env_path, "/", "9_Final_results-", Sys.Date()))
