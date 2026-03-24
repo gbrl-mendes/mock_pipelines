@@ -2986,7 +2986,7 @@ This step identifies ASVs present in negative controls (PCR, Extraction, Filtrat
                     `Prop. to Ext control` = 0, 
                     `Prop. to Filt control` = 0)
 
-    # Helper: Extract control names from sample metadata (matching legacy parsing)
+    # Extract control names from sample metadata
     extract_controls <- function(control_str) {
       
       if (is.na(control_str) || control_str == "") return(character(0))
@@ -3014,12 +3014,12 @@ This step identifies ASVs present in negative controls (PCR, Extraction, Filtrat
         dplyr::left_join(sample_controls,
                          by = c("ASV Sequence"),
                          suffix = c("", "_ctrl")) %>%
-        dplyr::group_by(`ASV Sequence`, UniqueFilename) %>%
+        dplyr::group_by(`ASV Sequence`, Unique_File_name) %>%
         dplyr::mutate(!!paste0("Prop. to ", 
                                ctrl_type) := dplyr::case_when(
                                  !is.na(`Max. ASV abd. in control_ctrl`) ~ 
                                    gtools::foldchange(
-                                     `RelativeAbundanceSample`,
+                                     `Relative_Abundance_Sample`,
                                      `Max. ASV abd. in control_ctrl`),
                                  TRUE ~ 0)) %>%
         dplyr::ungroup() %>%
@@ -3043,6 +3043,29 @@ This step identifies ASVs present in negative controls (PCR, Extraction, Filtrat
     # Verify results match legacy expectations
     table(all_ps_tbl_final$`Contamination status`)
     table(all_ps_tbl_final$`Prop. to PCR control`, useNA = "always")
+    ```
+
+### Recalculate Clean Abundances
+
+Once contamination statuses are flagged, these artifacts must be effectively removed from the quantitative data. This step zeroes the absolute abundance of any ASV identified as a "Possible contamination" and subsequently recalculates the total valid sequencing depth for each sample. Because the removal of contaminants shrinks the total sample size, new 'clean' relative abundances are computed to ensure the remaining true detections sum to 100%. Finally, fully zeroed records are removed to optimize the dataset for downstream ecological analyses.
+
+-   **Apply contamination filters and update frequencies.** Zero out contaminants, compute the new clean sample totals, update relative frequencies, and discard empty rows.
+
+    ```{r}
+    all_ps_tbl_final <- all_ps_tbl_final %>%
+      dplyr::mutate(`Clean Abundance` = dplyr::case_when(
+        `Contamination status` == "Possible contamination" ~ 0,
+        TRUE ~ Abundance)) %>%
+      dplyr::group_by(Project, 
+                      UniqueFilename, 
+                      Primer, 
+                      `Read origin`) %>%
+      dplyr::mutate(`Clean Sample Total` = sum(`Clean Abundance`)) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(`Clean Relative Abundance` = dplyr::case_when(
+        `Clean Sample Total` > 0 ~ `Clean Abundance` / `Clean Sample Total`,
+        TRUE ~ 0)) %>%
+      dplyr::filter(`Clean Abundance` > 0)
     ```
 
 ### Save the Environment!
