@@ -2486,7 +2486,7 @@ Biological databases occasionally lack designations for certain intermediate ran
           stringr::str_detect(`Phylum (NCBI)`, "WWE3$") ~ "Viruses",
           
           TRUE ~ `Superkingdom (NCBI)`))
-    
+
     # Show Complete Taxonomy Table
     View(taxonomy_tbl_filled)
     ```
@@ -2499,7 +2499,7 @@ Biological databases occasionally lack designations for certain intermediate ran
                    "Subphylum (NCBI)", "Class (NCBI)", "Subclass (NCBI)", 
                    "Order (NCBI)", "Suborder (NCBI)", "Family (NCBI)", 
                    "Subfamily (NCBI)", "Genus (NCBI)")
-    
+
     # Transform empty strings and literal "NA" values to true R NA before filling
     taxonomy_tbl_filled <- taxonomy_tbl_filled %>%
       dplyr::mutate(dplyr::across(dplyr::all_of(tax_ranks),
@@ -2527,14 +2527,14 @@ Biological databases occasionally lack designations for certain intermediate ran
       dplyr::mutate(`Superkingdom (NCBI)` = dplyr::coalesce(`Superkingdom (NCBI)`,
                                                             paste0("superkingdom of ",
                                                                    `Kingdom (NCBI)`)))
-    
+
     # Show Complete Taxonomy Table
     View(taxonomy_tbl_filled)
     ```
 
 ### Integrate Taxonomy and Abundance Data
 
-Once the taxonomic lineages are fully resolved and curated, they must be merged back into the quantitative ecological data. 
+Once the taxonomic lineages are fully resolved and curated, they must be merged back into the quantitative ecological data.
 
 -   **Combine tax and BLAST hits.** Merge the curated sequence identifications with their fully resolved taxonomic lineages into a single reference table. This table is saved locally as an `.rds` object to serve as a persistent taxonomic database, preventing the need to re-query NCBI APIs if downstream steps fail.
 
@@ -2562,7 +2562,7 @@ Once the taxonomic lineages are fully resolved and curated, they must be merged 
     # Creating a dedicated RDS ensures we don't lose the API results
     saveRDS(object = blast_res_tax,
             file = file.path(blast_path, paste0("blast_res_tax_", Sys.Date(), ".rds")))
-    
+
     # Optional: Reload if needed
     # blast_res_tax <- readRDS(file.path(blastpath, paste0("blast_res_tax_", Sys.Date(), ".rds")))
     ```
@@ -2582,7 +2582,7 @@ Once the taxonomic lineages are fully resolved and curated, they must be merged 
       
     # Verify the final column structure
     colnames(all_ps_tbl_final)
-    
+
     # Show Complete Results Table
     View(all_ps_tbl_final)
     ```
@@ -2593,6 +2593,106 @@ Once the taxonomic lineages are fully resolved and curated, they must be merged 
 
     ```{r}
     base::save.image(paste0(env_path, "/", "6_Taxonomic_curation-", Sys.Date()))
+    ```
+
+## 7. CO1 Taxonomy Assignment with BOLD
+
+While BLASTn against local nucleotide databases covers most markers, CO1 barcodes often benefit from complementary identification using the BOLD Systems database. This optional step queries the BOLD API for selected ASVs, parses the top hits, and prepares a clean, wide-format table that can later be merged into the main results.
+
+-   **Identify ASVs to query in BOLD.** Select CO1 (or other relevant) ASVs that are long enough and potentially under-identified by BLASTn, and generate their reverse complements for robust matching.
+
+    ```{r}
+    # Identify ASVs to be queried against BOLD (e.g., COI only)
+    asvs_bold <- asvs_blast_all[nchar(asvs_blast_all) >= 80]
+
+    # Also prepare reverse-complemented versions for completeness
+    asvs_bold_rev <- as.character(
+      Biostrings::reverseComplement(Biostrings::DNAStringSet(asvs_bold)))
+    ```
+
+-   **Define the BOLD query function.** Wrap the BOLD API call in a helper that retrieves the top Nhits, fetches taxonomy, and returns a tidy, wide-format result with basic metadata.
+
+    ```{r}
+    # Helper function to query BOLD and tidy the output
+    ID_bold <- function(sequence,
+                        db = "COX1_SPECIES_PUBLIC",
+                        keepSeq = TRUE,
+                        Nhits = 3) {
+      # 1. Identify sequence via BOLD
+      bold_res <- bold::bold_identify(sequences = c(sequence),
+                                      db = db,
+                                      response = FALSE,
+                                      keep_seq = keepSeq)
+      
+      # Bail out early if no hits returned
+      if (nrow(bold_res[[1]]) < 1) {
+        return(tibble::tibble())
+        }
+      
+      # 2. Filter first Nhits best hits by similarity
+      bold_res_filt <- bold_res[[1]] %>%
+        tibble::as_tibble() %>%
+        dplyr::arrange(dplyr::desc(similarity)) %>%
+        dplyr::slice_head(n = Nhits)
+      
+      # 3. Recover taxonomy for filtered hits
+      bold_tax <- bold::bold_identify_taxonomy(bold_res_filt)
+      
+      # 4. Keep only the most informative fields and rename them
+      bold_tax_filt <- bold_tax %>%
+        dplyr::select(ID,
+                      similarity,
+                      taxonomic_identification,
+                      genus_name,
+                      family_name,
+                      order_name,
+                      class_name,
+                      phylum_name,
+                      sequence_descriptions,
+                      database,
+                      specimen_country) %>%
+        dplyr::rename(`BOLD ID` = ID,
+                      `BOLD similarity` = similarity,
+                      `BOLD Species` = taxonomic_identification,
+                      `BOLD Genus` = genus_name,
+                      `BOLD Family` = family_name,
+                      `BOLD Order` = order_name,
+                      `BOLD Class` = class_name,
+                      `BOLD Phylum` = phylum_name,
+                      `BOLD Database` = database,
+                      `BOLD Country` = specimen_country)
+      
+      # 5. Add a row index and pivot wider to keep each hit in its own column
+      bold_tax_wide <- bold_tax_filt %>%
+        tibble::rowid_to_column(var = "res") %>%
+        tidyr::pivot_wider(names_from = res,
+                           values_from = dplyr::everything(),
+                           names_glue = "hit{res}.value{.value}") %>%
+        dplyr::mutate(Sequence = sequence) %>%
+        dplyr::relocate(Sequence)
+      
+      return(bold_tax_wide)
+      }
+    ```
+
+-   **Run BOLD queries in parallel.** Use furrr to submit multiple sequences to BOLD and combine all returned hits into a single table, saving the result for reuse.
+
+    ```{r}
+    # Optional: run BOLD identification in parallel for all selected ASVs
+    cores_to_use <- future::availableCores() - 2
+    future::plan(future::multisession, workers = cores_to_use)
+
+    BOLD_ids <- furrr::future_map_dfr(.x = asvs_bold,
+                                      .f = ~ ID_bold(sequence = .x,
+                                                     db = "COX1_SPECIES_PUBLIC",
+                                                     keepSeq = TRUE,
+                                                     Nhits = 3),
+                                      .options = furrr::furrr_options(seed = NULL))
+
+    # Save BOLD results for reproducibility
+    saveRDS(object = BOLD_ids,
+            file = file.path(blastpath, 
+                             paste0("BOLD_ids_", Sys.Date(), ".rds")))
     ```
 
 ## 7. Contamination Analysis
