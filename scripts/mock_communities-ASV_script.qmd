@@ -297,7 +297,7 @@ The raw sequencing reads are assessed for overall quality before any processing 
             report_name <- paste0(PRJ, 
                                   "--sequencing_quality-MultiQC_report.html")
              
-            cmd_multiqc <- paste0("multiqc --interactive ", fastqc_path, 
+            cmd_multiqc <- paste0("multiqc --no-data-dir --interactive ", fastqc_path, 
                                   " --filename ",
                                   file.path(multiqc_path, report_name))
             system(cmd_multiqc)
@@ -400,16 +400,16 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     ```{r}
         # Create paths for the future paired-output files and reshape to long format
-    sample_idx_tbl <- 
-      sample_idx_tbl_wide %>%
+    sample_idx_tbl <- sample_idx_tbl_wide %>%
       dplyr::mutate(FWD_R1_paired = file.path(paired_libs,
-                                              paste0(Unique_File_name, "--FWD_R1_paired.fastq.gz")),
+                                              paste0(Unique_File_name, 
+                                                     "--FWD_R1_paired.fastq.gz")),
                     FWD_R2_paired = file.path(paired_libs,
-                                              paste0(Unique_File_name, "--FWD_R2_paired.fastq.gz"))) %>%
-      tidyr::pivot_longer(
-        cols = c(FWD_R1, FWD_R2, FWD_R1_paired, FWD_R2_paired),
-        names_to  = "Stage",
-        values_to = "Read file") %>%
+                                              paste0(Unique_File_name, 
+                                                     "--FWD_R2_paired.fastq.gz"))) %>%
+      tidyr::pivot_longer(cols = c(FWD_R1, FWD_R2, FWD_R1_paired, FWD_R2_paired),
+                          names_to  = "Stage",
+                          values_to = "Read file") %>%
       dplyr::mutate(Unique_File_name_Primer = Unique_File_name)
 
     # Show table
@@ -428,7 +428,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                       "K" = "[GT]", "S" = "[GC]", "W" = "[AT]", "B" = "[CGT]",
                       "D" = "[AGT]", "V" = "[ACG]", "N" = "[ACGT]")
       stringr::str_replace_all(dna_seq, iupac_code)
-    }
+      }
     ```
 
 -   **Primer database.** Defines primer names and sequences (including IUPAC codes where applicable). Comments are retained only where they document the biological identity of the primers.
@@ -485,22 +485,19 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 
     ```{r}
     # Generates all 4 orientations (FWD/REV/COMP/REVCOMP) for a single primer
-        allOrients <- function(primers_list) {
+    allOrients <- function(primers_list) {
       require(Biostrings)
       
       dna <- Biostrings::DNAString(primers_list$`Primer seq`)
       
-      orients <- 
-        c(Forward= dna,
-          Complement = Biostrings::complement(dna),
-          Reverse    = Biostrings::reverse(dna),
-          RevComp    = Biostrings::reverseComplement(dna))
+      orients <- c(Forward= dna,Complement = Biostrings::complement(dna),
+                   Reverse = Biostrings::reverse(dna),
+                   RevComp = Biostrings::reverseComplement(dna))
       
       primer_tbl <- sapply(orients, toString)
       
-      primer_tbl <- 
-        tibble::tibble(Sequence = primer_tbl,
-                       `Primer orientation` = names(primer_tbl)) %>%
+      primer_tbl <- tibble::tibble(Sequence = primer_tbl,
+                                   `Primer orientation` = names(primer_tbl)) %>%
         dplyr::mutate(Primer = primers_list$`Primer name`) %>%
         tidyr::unite(col = "Orientation name",
                      Primer,
@@ -513,7 +510,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
       base::names(primer_tbl$Sequence) <- primer_tbl$`Orientation name`
       
       primer_tbl
-        }
+      }
     ```
 
 -   **Generate all primer orientations** Produces all orientations (Forward/Reverse/Complement/RevComp.) and their regex representation for downstream searching.
@@ -523,6 +520,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     primers_all_orients <- purrr::map_dfr(primers_list, 
                                           allOrients) %>%
       dplyr::mutate(`Primer pair` = stringr::str_remove_all(Primer, "_FWD$|_REV$"))
+
     # Inspect primers orientations
     View(primers_all_orients)
     ```
@@ -532,23 +530,26 @@ The following workflow performs a critical diagnostic check on the raw sequencin
 -   **Define primer counting function.** The function `multi_primerHits()` applies B. Callahan's `primerHits()` function across all primer orientations for a single FASTQ file, returning a table of hit counts per orientation. Defining it here keeps the primer-counting logic close to where it is used.
 
     ```{r}
-    # Counts how many reads in a FASTQ file contain a given primer (allowing up to 1 mismatch)
+    # Counts how many reads in a FASTQ file contain a given primer
     primerHits <- function(primer, file_name) {
-      nhits <- Biostrings::vcountPattern(primer,
-                                         ShortRead::sread(ShortRead::readFastq(file_name)),
-                                         fixed        = FALSE,
-                                         max.mismatch = 1)
+      
+      nhits <- 
+        Biostrings::vcountPattern(primer,
+                                  ShortRead::sread(ShortRead::readFastq(file_name)),
+                                  fixed = FALSE,
+                                  max.mismatch = 1)
       sum(nhits > 0)
       }
-    
+
     # primerHits function applied to all primers orientations
     multi_primerHits <- function(Read_file, primers) {
+      
       primer_counts <- purrr::map_df(primers,
                                      .f = primerHits,
                                      file_name = Read_file)
-      primer_counts %>%
-        dplyr::mutate(`Read file` = Read_file)
-    }
+      
+      primer_counts %>% dplyr::mutate(`Read file` = Read_file)
+      }
     ```
 
 -   **Per‑file primer hits.** Counts the number of reads that contain a given primer pattern (with up to 1 mismatch). All four orientations generated by `allOrients()` — Forward, Complement, Reverse, and RevComp — are searched simultaneously against each R1 and R2 file, enabling detection of primers regardless of read orientation or library preparation strategy. The resulting table is then joined with sample metadata and annotated with total read counts per file to allow proportional comparisons across samples.
@@ -586,13 +587,19 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                                                    furrr::furrr_options(seed = NULL))
       
       tictoc::toc()
+      
+      message("✓ Primer search complete. Results in `primers_in_Nreads`:\n",
+            "  ", length(unique(primers_in_Nreads$Unique_File_name)), " samples × ",
+            length(primers_seqs), " primer orientations across ",
+            length(reads_seqs), " files.")
     }
 
     # Join with sample metadata and calculate total reads per file
-    primers_in_Nreads <- 
-      primers_in_Nreads %>%
-      dplyr::left_join(sample_idx_tbl, by = "Read file") %>%
-      dplyr::mutate(Read = dplyr::if_else(stringr::str_detect(Stage, "R1"), "R1", "R2")) %>%
+    primers_in_Nreads <-  primers_in_Nreads %>%
+      dplyr::left_join(sample_idx_tbl, 
+                       by = "Read file") %>%
+      dplyr::mutate(Read = dplyr::if_else(stringr::str_detect(Stage, "R1"), 
+                                          "R1", "R2")) %>%
       tidyr::unite(col = "Unique_File_name_Read",
                    Unique_File_name,
                    Read,
@@ -600,10 +607,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                    remove = FALSE) %>%
       dplyr::mutate(`Total reads` = ShortRead::countFastq(dirPath = `Read file`)[, 1])
 
-    message("✓ Primer search complete. Results in `primers_in_Nreads`:\n",
-            "  ", length(unique(primers_in_Nreads$Unique_File_name)), " samples × ",
-            length(primers_seqs), " primer orientations across ",
-            length(reads_seqs), " files.")
+    View(primers_in_Nreads)
     ```
 
 #### Primers identified in each sample
@@ -647,7 +651,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
      # Plot identified primers
     primer_colours <- c("white", "red", "yellow",
                         "green", "dark green")
-    
+
     # Create levels for Files display on plot based on the prepared data
     Unique_File_name_Read_levels <- primers_in_Nreads_long %>% 
       dplyr::pull(Unique_File_name_Read) %>% 
@@ -683,7 +687,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
         # Bar layer
         ggplot2::geom_bar(aes(x = `Total reads`,
                               fill = Pct_Reads,
-                              color = Primer,
+                              # color = Primer,
                               group = Sequences),
                           stat = "identity",
                           position = "dodge",
@@ -693,10 +697,10 @@ The following workflow performs a critical diagnostic check on the raw sequencin
         # Text labels for counts
         ggplot2::geom_text(aes(x = `Total reads`, 
                                label = Count),
-                           hjust = 0, 
-                           size = 1) +
+                           hjust = -0.1, 
+                           size = 3.5) +
         # Color scales
-        ggplot2::scale_fill_gradientn(name = "Proportion of reads\n with primer (%)",
+        ggplot2::scale_fill_gradientn(name = "Proportion of reads\nwith primer (%)",
                                       colours = primer_colours,
                                       values = c(0, 1),
                                       na.value = "white") +
@@ -704,29 +708,33 @@ The following workflow performs a critical diagnostic check on the raw sequencin
         ggplot2::scale_y_discrete(limits = rev) +
         ggplot2::scale_x_log10(
           breaks = c(10, 100, 1000, 10000, 100000),
-          expand = expansion(mult = c(0, 0.2))) +
+          expand = expansion(mult = c(0, 0.4))) +
         ggplot2::scale_alpha(guide = 'none') +
         ggplot2::guides(color = guide_legend(override.aes = list(fill = "white", 
                                                                  size = 10))) +
         
         # Theme adjustments
-        ggplot2::theme_light(base_line_size = 0.025, base_size = 6) +
-        ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1),
-                       strip.text.y = element_text(size = 10),
-                       plot.title = element_text(size = 10),
-                       plot.subtitle = element_text(size = 6),
-                       legend.text = element_text(size = 5),
-                       legend.title = element_text(size = 7)) +
+        ggplot2::theme_light(base_line_size = 0.025, base_size = 10) +
+        ggplot2::theme(axis.title.x = element_text(size = 12, face = "bold"),
+                       axis.title.y = element_text(size = 12, face = "bold"),
+                       axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+                       axis.text.y = element_text(size = 9),
+                       strip.text.x = element_text(size = 9, face = "bold"),
+                       strip.text.y = element_text(size = 9, face = "bold"),
+                       plot.title = element_text(size = 16.5, face = "bold"),
+                       plot.subtitle = element_text(size = 10.5),
+                       legend.text = element_text(size = 9),
+                       legend.title = element_text(size = 10.5, face = "bold")) +
         
         # Dynamic horizontal lines based on actual sample count
         ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2), 
                             color = "darkgrey") +
         
         # Titles and Facets
-        ggplot2::labs(title = PRJ,
-                      subtitle = "Presença de primers nas amostras:\nintensidade de cor relativa à contagem do respectivo primer no conjunto de reads\n(max. mismatch = 1)",
+        ggplot2::labs(title = paste0("Primer presence on samples: ", PRJ, " project"),
+                      subtitle = "Color gradient relative to respective primer count on reads",
                       x = "Primers",
-                      y = "Amostra") +
+                      y = "Samples") +
         ggplot2::facet_grid(rows = vars(Primer_lbl),
                             cols = vars(Sequences_lbl),
                             scales = "free",
@@ -738,8 +746,8 @@ The following workflow performs a critical diagnostic check on the raw sequencin
                                     "-primers_found_in_reads.pdf"),
                       plot = primers_tile,
                       device = "pdf",
-                      width = 10 + (n_primers * 10),
-                      height = (n_samples * 0.3) + 3,
+                      width = 10 + (n_primers * 15),
+                      height = (n_samples * 1.5) + 3,
                       units = "cm",
                       limitsize = FALSE,
                       dpi = 600)
@@ -781,7 +789,7 @@ The following workflow performs a critical diagnostic check on the raw sequencin
     **Case 2 — Standard library, amplicon shorter than the read length (read-through occurs).** When the amplicon is shorter than the read length, R1 reads through the entire insert and into the REV primer site, encountering it from the antisense direction — it therefore appears as `RevComp` at the 3' end of R1. Symmetrically, R2 reads through and encounters the FWD primer site as `RevComp` at its 3' end. The expected result is:
 
     | Primer  | R1                                       | R2                                       |
-    |:--------------|:----------------------------|:----------------------------|
+    |:-----------------|:--------------------------|:--------------------------|
     | **FWD** | **Forward** (good, 5' start of R1)       | **RevComp** (read-through, 3' end of R2) |
     | **REV** | **RevComp** (read-through, 3' end of R1) | **Forward** (good, 5' start of R2)       |
 
@@ -834,7 +842,7 @@ Before DADA2 can learn error rates and infer ASVs, reads must be free of ambiguo
 
 #### Pre-filtering reads
 
-DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the Cutadapt step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (**`maxN = 0`**). Comprehensive quality filtering, error tracking (such as **`maxEE`**), and length truncation are purposefully deferred until after primer removal.
+DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to accurately perform its core sample inference. Furthermore, the presence of Ns can interfere with accurate primer recognition and mapping during the Cutadapt step. Following the official DADA2 ITS workflow, this pre-filtering step is executed strictly to discard read pairs containing any Ns (`maxN = 0`). Comprehensive quality filtering, error tracking (such as `maxEE`), and length truncation are purposefully deferred until after primer removal.
 
 -   **Prepare file paths.** Identify paired-end read files that contain primers and organize their paths for the filtering step.
 
@@ -857,7 +865,7 @@ DADA2 requires sequences to be completely free of ambiguous nucleotides (Ns) to 
     # primer_paired_files$FWD_R1_paired %>% basename()
     ```
 
--   **Define pre-filtering function.** Create a wrapper function for filterAndTrim to handle forward and reverse reads and removing ambiguous bases (Ns).
+-   **Define pre-filtering function.** Create a wrapper function for `filterAndTrim` to handle forward and reverse reads and removing ambiguous bases (Ns).
 
     ```{r}
     # Custom function to repair and filter reads using DADA2
@@ -1251,8 +1259,8 @@ A well-trimmed library should show zero counts in all orientations for all prime
 
           # Text labels for counts
           ggplot2::geom_text(ggplot2::aes(x = `Total reads`, label = Count),
-                             hjust = 0,
-                             size  = 1) +
+                             hjust = -0.1,
+                             size  = 3.5) +
 
           # Color scales
           ggplot2::scale_fill_gradientn(name = "% reads with\nresidual primer",
@@ -1263,29 +1271,34 @@ A well-trimmed library should show zero counts in all orientations for all prime
           # Axes and Guides
           ggplot2::scale_y_discrete(limits = rev) +
           ggplot2::scale_x_log10(breaks = c(10, 100, 1000, 10000, 100000),
-                                 expand = ggplot2::expansion(mult = c(0, 0.2))) +
+                                 expand = ggplot2::expansion(mult = c(0, 0.4))) +
           ggplot2::scale_alpha(guide = "none") +
           ggplot2::guides(color = guide_legend(override.aes = list(fill = "white",
                                                                    size = 10))) +
 
           # Theme adjustments
-          ggplot2::theme_light(base_line_size = 0.025, base_size = 6) +
-          ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1),
-                         strip.text.y = element_text(size = 10),
-                         plot.title = element_text(size = 10),
-                         plot.subtitle = element_text(size = 6),
-                         legend.text = element_text(size = 5),
-                         legend.title = element_text(size = 7)) +
+          ggplot2::theme_light(base_line_size = 0.025, base_size = 10) +
+          ggplot2::theme(axis.title.x = element_text(size = 12, face = "bold"),
+                         axis.title.y = element_text(size = 12, face = "bold"),
+                         axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+                         axis.text.y = element_text(size = 9),
+                         strip.text.x = element_text(size = 9, face = "bold"),
+                         strip.text.y = element_text(size = 9, face = "bold"),
+                         plot.title = element_text(size = 16.5, face = "bold"),
+                         plot.subtitle = element_text(size = 10.5),
+                         legend.text = element_text(size = 9),
+                         legend.title = element_text(size = 10.5, face = "bold")) +
 
           # Dynamic horizontal lines based on actual sample count
           ggplot2::geom_hline(yintercept = seq(0.5, n_samples + 0.5, 2),
                               color = "darkgrey") +
 
           # Titles and Facets
-          ggplot2::labs(title = paste0(PRJ, " — Post-Cutadapt Residual Primers"),
-                        subtitle = paste0("Non-zero counts indicate incomplete primer removal. ","Forward and RevComp orientations only (max.mismatch = 1)."),
-                        x = "Primer orientation",
-                        y = "Sample (file × read direction)") +
+          ggplot2::labs(title = paste0("Post-Cutadapt Residual Primers: ", PRJ, " project"),
+                        subtitle = paste0("Non-zero counts indicate incomplete primer removal. "),
+                      x = "Primers",
+                      y = "Samples") +
+             
           ggplot2::facet_grid(rows = ggplot2::vars(Primer_lbl),
                               cols = ggplot2::vars(Sequences_lbl),
                               scales = "free",
@@ -1295,8 +1308,8 @@ A well-trimmed library should show zero counts in all orientations for all prime
                              "-residual_primers_post_cutadapt.pdf"),
                         plot = primers_tile_residual,
                         device = "pdf",
-                        width = 10 + n_primers * 10,
-                        height = n_samples * 0.3 + 3,
+                        width = 10 + (n_primers * 15),
+                        height = n_samples * 1.5 + 3,
                         units = "cm",
                         limitsize = FALSE,
                         dpi = 600)
@@ -1366,7 +1379,7 @@ With primer sequences removed, the Cutadapt output files now reflect only the bi
       # 2. Run MultiQC
       cutadapt_report_name <- paste0(PRJ, "--post_cutadapt_quality-MultiQC_report.html")
       
-      cmd_multiqc <- paste0("multiqc --interactive ",
+      cmd_multiqc <- paste0("multiqc --no-data-dir --interactive ",
                             fastqc_path, " --filename ",
                             file.path(multiqc_path, cutadapt_report_name))
       
@@ -1395,18 +1408,18 @@ With primers removed by Cutadapt, reads now reflect only the biological sequence
                                      "Run"),
                          names_from  = "Stage",
                          values_from = "Read file") %>%
-      dplyr::mutate(FWD_R1_filtered = stringr::str_replace_all(FWD_R1_cutadapt, "cutadapt", "filtered"),
-                    FWD_R2_filtered = stringr::str_replace_all(FWD_R2_cutadapt, "cutadapt", "filtered")) %>%
-      tidyr::unite(col    = "Unique_File_name_Primer",
+      dplyr::mutate(FWD_R1_filtered = stringr::str_replace_all(FWD_R1_cutadapt, 
+                                                               "cutadapt", "filtered"),
+                    FWD_R2_filtered = stringr::str_replace_all(FWD_R2_cutadapt, 
+                                                               "cutadapt", "filtered")) %>%
+      tidyr::unite(col = "Unique_File_name_Primer",
                    Unique_File_name, Primer,
-                   sep    = "--",
+                   sep = "--",
                    remove = FALSE)
 
     # Show prepared file paths
     View(filter_files_per_primer)
     ```
-
--   **Define filtering function.** Create a wrapper for `filterAndTrim` applying quality thresholds.
 
 -   **Execute filtering.** Run DADA2's native `filterAndTrim` on all samples simultaneously.
 
@@ -1453,7 +1466,22 @@ The key parameters to adjust for your dataset are:
                              verbose = TRUE)
       
       tictoc::toc()
-    }
+      }
+    
+    # Generate summary table
+    filtered_summary <- sample_filtered_out %>%
+      tibble::as_tibble(rownames = "Read file") %>% 
+      dplyr::mutate(Unique_File_name = stringr::str_remove(`Read file`, 
+                                                           "--FWD_R1_cutadapt.fastq.gz"),
+                    Proportion = round((reads.out / reads.in * 100), 
+                                       digits = 2)) %>% 
+      dplyr::rename("Raw reads (pairs)" = "reads.in",
+                    "Filtered reads (pairs)" = "reads.out") %>% 
+      dplyr::select(-c(`Read file`)) %>% 
+      relocate(Unique_File_name)
+
+    # View result
+    filtered_summary
     ```
 
 #### Quality checking post-filtering
@@ -1515,7 +1543,7 @@ The read retention summary produced by `filterAndTrim` (pre_filtered_summary) sh
       # 2. Run MultiQC
       filtered_report_name <- paste0(PRJ, "--post_filtered_quality-MultiQC_report.html")
       
-      cmd_multiqc <- paste0("multiqc --interactive ",
+      cmd_multiqc <- paste0("multiqc --no-data-dir --interactive ",
                             fastqc_path, " --filename ",
                             file.path(multiqc_path, filtered_report_name))
       
@@ -1631,7 +1659,7 @@ With primers removed and low-quality bases filtered out, the reads are ready for
       all_dadaRs <- append(all_dadaRs, seq_dadaRs)
       all_derep_forward <- append(all_derep_forward, seq_derep_forward)
       all_derep_reverse <- append(all_derep_reverse, seq_derep_reverse)
-    }
+      }
 
     message("ASV Inference Complete across all runs.")
     ```
@@ -1812,7 +1840,9 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                      Unique_File_name, Primer,
                      sep = "--",
                      remove = FALSE) %>%
-        dplyr::select(Unique_File_name_Primer, Unique_File_name, Primer, `Primer detected reads (pairs)`)
+        dplyr::select(Unique_File_name_Primer, 
+                      Unique_File_name, Primer, 
+                      `Primer detected reads (pairs)`)
       
       # 4. Extract DADA2 sequence steps
       tbl_Denoised_R1 <- tibble::enframe(sapply(all_dadaFs, getN),
@@ -1835,7 +1865,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                                          name = "Unique_File_name_Primer", 
                                          value = "Non-chimeric Merged")
       
-      tbl_NonChim_Concat <- tibble::enframe(rowSums(mergers_seqtab.nochim),
+      tbl_NonChim_Concat <- tibble::enframe(rowSums(concat_seqtab.nochim),
                                             name = "Unique_File_name_Primer",
                                             value = "Non-chimeric Concat")
       
@@ -1847,7 +1877,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                                       name = "Unique_File_name_Primer", 
                                       value = "Non-chimeric R2")
       
-      # 5. Combine all tracking metrics into a single cohesive table
+      # 4. Combine all tracking metrics into a single cohesive table
       all_track <- list(tbl_Cutadapt,
                         tbl_Denoised_R1,
                         tbl_Denoised_R2,
@@ -1857,20 +1887,28 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                         tbl_NonChim_Concat,
                         tbl_NonChim_R1, 
                         tbl_NonChim_R2) %>%
-        purrr::reduce(dplyr::left_join, by = "Unique_File_name_Primer") %>%
-        dplyr::left_join(pre_filtered_summary, by = "Unique_File_name") %>%
+        purrr::reduce(dplyr::left_join, 
+                      by = "Unique_File_name_Primer") %>%
+        dplyr::left_join(pre_filtered_summary %>%  dplyr::select(-c(Proportion)), 
+                         by = "Unique_File_name") %>%
+        dplyr::left_join(filtered_summary %>% dplyr::select(-c(Proportion, `Raw reads (pairs)`)), 
+                         by = "Unique_File_name") %>%
         # Join with original configuration metadata
-        dplyr::left_join(primers_n_samples, by = c("Unique_File_name", "Primer")) %>%
+        dplyr::left_join(primers_n_samples,
+                         by = c("Unique_File_name", "Primer")) %>%
         # Reorder columns logically to match the sequence of events
-        dplyr::relocate(Project, Sample, .after = Unique_File_name_Primer) %>%
-        dplyr::relocate(`Raw reads (pairs)`, .before = `Primer detected reads (pairs)`)
+        dplyr::relocate(Project, Sample, `Raw reads (pairs)`, `Pre-Filtered reads (pairs)`,
+                        `Primer detected reads (pairs)`, `Filtered reads (pairs)`,
+                        `Denoised (R1)`, `Denoised (R2)`, Merged, Concat, `Non-chimeric Merged`, 
+                        `Non-chimeric Concat`, `Non-chimeric R1`, `Non-chimeric R2`)
       
       # Show preview
       all_track %>%
       dplyr::select(Unique_File_name, 
                     `Raw reads (pairs)`, 
-                    `Primer detected reads (pairs)`,
                     `Pre-Filtered reads (pairs)`, 
+                    `Primer detected reads (pairs)`,
+                    `Filtered reads (pairs)`,
                     `Denoised (R1)`,
                     `Denoised (R2)`,
                     `Non-chimeric Merged`,
@@ -1908,8 +1946,9 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
       tidyr::gather(key = "Stage", 
                     value = "Read counts",
                     "Raw reads (pairs)",
-                    "Primer detected reads (pairs)",
                     "Pre-Filtered reads (pairs)", 
+                    "Primer detected reads (pairs)",
+                    "Filtered reads (pairs)",
                     "Denoised (R1)",
                     "Denoised (R2)",
                     "Merged",
@@ -1918,8 +1957,9 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
                     "Non-chimeric R1",
                     "Non-chimeric R2") %>%
       dplyr::mutate(Stage = factor(Stage, levels = c("Raw reads (pairs)",
-                                                     "Primer detected reads (pairs)",
                                                      "Pre-Filtered reads (pairs)", 
+                                                     "Primer detected reads (pairs)",
+                                                     "Filtered reads (pairs)",
                                                      "Denoised (R1)",
                                                      "Denoised (R2)",
                                                      "Merged",
@@ -1931,7 +1971,7 @@ A fundamental quality control practice in metabarcoding is monitoring the propor
     options(scipen = 22)
 
     # Define a clean Viridis palette explicitly mapping to our 7 stages
-    stage_colors <- viridis::turbo(n = 7, direction = -1)
+    stage_colors <- viridis::turbo(n = 11, direction = -1)
 
     for (PRJ in all_projects) {
 
@@ -3160,22 +3200,18 @@ Refines BLAST hits into final ecological identifications with confidence scores,
     # Create final clean table
     results_table_clean <- all_ps_tbl_final %>%
       # Rename control columns for clarity
-      dplyr::rename(
-    `PCR Control` = `PCR control`,
-    `Ext. Control` = `Extraction control`,
-    `Filt. Control` = `Filtration control`
-      ) %>%
+      dplyr::rename(`PCR Control` = `PCR control`,
+                    `Ext. Control` = `Extraction control`,
+                    `Filt. Control` = `Filtration control`
+                    ) %>%
       # Select and order essential columns
-      dplyr::select(
-    Researcher, Project, Primer, Sample, Unique_File_name,
-    `Read origin`, `Relative abundance on sample`, Abundance,
-    `BLASTn pseudo-score`, Identification, `Curated ID`, `Possible Metazoa`,
-    `Superkingdom (NCBI)`, `Phylum (NCBI)`, `Class (NCBI)`, `Order (NCBI)`, 
-    `Family (NCBI)`, `Genus (NCBI)`, `Species (NCBI)`,
-    `ASV (Sequence)`, `ASV Size (pb)`,
-    `Contamination status`,
-    starts_with("Metadata")
-      )
+      dplyr::select(Researcher, Project, Primer, Sample, Unique_File_name,
+                    `Read origin`, `Relative abundance on sample`, Abundance,
+                    `BLASTn pseudo-score`, Identification, `Curated ID`, `Possible Metazoa`,
+                    `Superkingdom (NCBI)`, `Phylum (NCBI)`, `Class (NCBI)`, `Order (NCBI)`,
+                    `Family (NCBI)`, `Genus (NCBI)`, `Species (NCBI)`,
+                    `ASV (Sequence)`, `ASV Size (pb)`, `Contamination status`,
+                    starts_with("Metadata"))
 
     # Save final results
     writexl::write_xlsx(
@@ -3202,7 +3238,7 @@ This diagnostic visualization displays the identification status of all ASVs acr
     # Define shapes for superkingdoms 
     taxa_shapes <- c("Archaea" = 25, "Bacteria" = 24, 
                      "Eukaryota" = 21, "Viruses" = 23)
-    
+
     # BLAST Score Gradient (Low to High quality)
     blast_score_palette <- c("#330000", "darkred", "red", 
                              "yellow", "green", "darkgreen")
@@ -3318,8 +3354,6 @@ This diagnostic visualization displays the identification status of all ASVs acr
                       shape = ggplot2::guide_legend(override.aes = list(size = 6)),
                       size = ggplot2::guide_legend(override.aes = list(size = 5)))
     ```
-
-<!-- -->
 
 -   **Render interactive Plotly and save outputs.** Convert to interactive Plotly HTML and static PDF per project, matching legacy file naming and dimensions.
 
