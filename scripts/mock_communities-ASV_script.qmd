@@ -53,9 +53,7 @@ chunk_output_type: console
       figs_path <- file.path(prjct_path, "figures")
       blast_path <- file.path(results_path, "blast")
       swarm_path <- file.path(results_path, "swarm")
-      dmx_path <- file.path(pipe_libs, "dmx")
-      dmx_all_path <- file.path(dmx_path, "all_dmx")
-      dmx_combined_path <- file.path(dmx_path, "all_combined")
+      dmx_path <- file.path(pipe_libs, "demultiplex")
       nochim_path <- file.path(results_path, "non_chimera")
       tables_path <- file.path(results_path, "tables")
       track_path <- file.path(results_path, "track_plots")
@@ -65,9 +63,8 @@ chunk_output_type: console
     # Paths to be created
     paths <- c(prjct_path, env_path, data_path, pipe_libs, raw_libs,
                paired_libs, cutadapt_libs, qual_path, results_path,
-               figs_path, blast_path, swarm_path, dmx_path, dmx_all_path,
-               dmx_combined_path, nochim_path, tables_path, track_path,
-               error_path)
+               figs_path, blast_path, swarm_path, dmx_path, nochim_path, 
+               tables_path, track_path, error_path)
 
     for (dir in paths) {
       if (dir.exists(dir)) {
@@ -95,7 +92,7 @@ chunk_output_type: console
 
     ```{r}
     # Demultiplex custom function
-    source("/home/gabriel/functions/dmx_metabar2.R")
+    source("/home/gabriel/functions/v5_dmx_metabar2.R")
     ```
 
 ### Load Samples table
@@ -109,11 +106,7 @@ After filling in the table, save it as .csv an place it on the data folder, insi
     ```{r}
     primers_n_samples <- 
       # readr::read_csv(file = file.path(prjct_path, "data", "mock_primer_n_samples.csv"))
-      read.csv(file = "/home/gabriel/projetos/mock_pipelines/data/planilha_base_eDNA_metabar_e_dmx--set25.csv",
-                      sep = ";") %>%
-      select(-c(`Metadata.3`, `Metadata.4`, `Metadata.5`)) %>% 
-      mutate(across(where(is.character), ~na_if(trimws(.), ""))) %>% 
-      remove_empty()
+      readr::read_csv(file = file.path(prjct_path, "data", "teste_primers_n_samples.csv"))
 
     # Show if the primer_n_samples table was loaded successfully
     primers_n_samples %>% 
@@ -204,7 +197,7 @@ The second phase of the pipeline focuses on the pre-processing and diagnostics o
 Demultiplexing assigns each read pair to its corresponding sample based on the unique combination of forward and reverse index sequences flanking the amplicon. This pipeline uses a custom R function, `dmx_metabar2`, which wraps [Cutadapt](https://cutadapt.readthedocs.io) to perform combinatorial paired-end demultiplexing. The function supports three library configurations, which must be selected according to how your sequencing run was prepared:
 
 -   **Conventional (single orientation):** All read pairs have the forward index on R1 and the reverse index on R2. Set `mixed_orientation = FALSE`.
--   **Dual mixed-orientation, separated output:** Approximately half the read pairs carry the forward index on R1 and the other half carry it on R2. The function separates them into `/standard/` and `/flipped/` output folders. Set `mixed_orientation = TRUE, merge_mixed = FALSE`. **This is the approach recommended by [B. Callahan](https://github.com/benjjneb/dada2/issues/938) for mixed-orientation data**, as it preserves the integrity of DADA2's error model by ensuring all R1 reads within a set begin with the same primer.
+-   **Dual mixed-orientation, separated output:** Approximately half the read pairs carry the forward index on R1 and the other half carry it on R2. The function separates them into `/standard/` and `/flipped/` output folders. Set `mixed_orientation = TRUE`, `merge_mixed = FALSE`. **This is the approach recommended by [B. Callahan](https://github.com/benjjneb/dada2/issues/938) for mixed-orientation data**, as it preserves the integrity of DADA2's error model by ensuring all R1 reads within a set begin with the same primer.
 -   **Dual mixed-orientation, merged output:** Same as above, but standard and flipped pairs are concatenated into a single combined file per sample using `Rfastp::catfastq`. Set `mixed_orientation = TRUE, merge_mixed = TRUE`. This is simpler but requires careful handling downstream, as R1 files will contain reads beginning with both primers.
 
 If you are unsure which configuration applies to your data, run the **Primer Detection Analysis** section first (Section 2.x). A mixed-orientation library will show roughly equal counts of both primers in both R1 and R2 files in the `Forward` orientation column of the primer diagnostic plot.
@@ -217,21 +210,29 @@ The function reads index names and sequences directly from the `primers_n_sample
 
 The parameters below are exposed as arguments in `dmx_metabar2` so they can be tuned per project without modifying the function source. Read each parameter description carefully before running, as the correct values depend on your index design.
 
--   **`query_size`** — Number of bases used for index matching, counted **after** the N-padding is stripped. Set this to the exact length of your index tag. Using a value larger than the tag will cause Cutadapt to match bases from the primer sequence as well, potentially reducing specificity between samples sharing similar primer sequences. If your indexes have no N-padding and include the full index+primer sequence, set `query_size` to the index length only. Set to `NA` to use the full sequence as-is.
+-   **`query_size`** (**`--overlap` +** FASTA truncation) — Controls how many bases are used for index matching. This parameter operates in **two independent steps** inside the function:
 
--   **`cut_error_rate`** — Maximum proportion of mismatches allowed in the match (`-e`). `0` means exact matching only. For short, high-quality Illumina indexes this is generally the safest choice. If demultiplexing efficiency is unexpectedly low, increasing to `0.1` allows 1 mismatch per 10 bp — but note that for tags shorter than 10 bp this still rounds to 0 errors allowed.
+    1.  **Before calling Cutadapt**, each index sequence in the FASTA file is truncated to exactly `query_size` bases (after N-padding is stripped from the 5′ end). This ensures that only the index bases — and not any downstream primer sequence — are written as reference in the FASTA.
 
--   **`cut_indels`** — Whether to allow insertions and deletions in the index match. Should remain `FALSE` (`--no-indels`) for standard Illumina indexes to prevent shifted-position false matches.
+    2.  `--overlap query_size` is passed to Cutadapt, forcing it to require **all** `query_size` bases to align before accepting a match. This prevents partial matches, which would occur with Cutadapt's default `--overlap 3`.
 
--   **`cut_pair_filter`** — Controls when a read pair is discarded (`--pair-filter`). `"any"` discards a pair if **either** R1 or R2 fails to match an index — the most conservative option. `"both"` discards a pair only if **both** reads fail, which may allow partially ambiguous assignments through. Use `"any"` unless you have a specific reason to retain partially matched pairs.
+    Set `query_size` to the exact length of your index tag (after N removal). Using a value larger than the tag will include primer bases in the FASTA reference, reducing specificity between samples that share similar primer sequences. Set to `NA` to skip FASTA truncation and disable the `--overlap` constraint entirely (not recommended for standard demultiplexing).
 
--   **`cut_max_n`** — Maximum number of N bases tolerated per read before discarding it (`--max-n`). Set to `NA` to disable this filter entirely. **If your index sequences contain N's** (e.g., phase-balancing N-padding at the 5′ end of the tag), you must set this to `NA` — otherwise Cutadapt will discard all reads containing any N before the matching step, resulting in massive read loss. Set to `0` only if your indexes are fully defined (no N's) and you want to discard reads with any ambiguous base in the biological sequence.
+-   **`cut_error_rate`** **(`-e`)** — Maximum proportion of mismatches allowed in the index match. 0 means exact matching only, which is the safest choice for short, high-quality Illumina indexes. If demultiplexing efficiency is unexpectedly low, increasing to 0.1 allows 1 mismatch per 10 bp — but note that for tags shorter than 10 bp, the allowed error count is computed as floor(tag_length × error_rate), which for an 8 bp tag at 0.1 still rounds to 0 allowed errors, since 8 × 0.1 = 0.8 \< 1.
 
--   **`cut_match_wildcards`** — Enables IUPAC wildcard matching in the index FASTA sequences (`--match-read-wildcards`). Set to `TRUE` if your index sequences contain N's or any IUPAC ambiguity code, so that each N in the FASTA matches any base in the read. Set to `FALSE` only if all index sequences are fully defined.
+-   **`cut_indels`** (**`--no-indels`**) — Whether to allow insertions and deletions in the index match. When set to `FALSE` (the default), `--no-indels` is passed to Cutadapt, restricting errors to mismatches only. Should remain FALSE for standard Illumina indexes to prevent shifted-position false matches.
 
--   **`cut_discard_untrimmed`** — Whether to discard read pairs where no index was found (`--discard-untrimmed`). Set to `TRUE` to keep only reads assigned to a known sample. A high untrimmed rate (\> 20% of raw reads) suggests a mismatch between the index sequences in the configuration table and those actually used during library preparation — check with your sequencing center's sample sheet before proceeding.
+-   **`cut_pair_filter`** (**`--pair-filter`**) — Controls when a read pair is discarded. "`any`" discards a pair if either R1 or R2 fails to match an index — the most conservative option. "`both`" discards a pair only if both reads fail to match, which may allow partially ambiguous assignments through. Use "`any`" unless you have a specific reason to retain partially matched pairs.
 
--   **`cut_action`** — What Cutadapt does with the matched index sequence after assignment (`--action`). `"retain"` leaves the index in the read, which is appropriate when a downstream Cutadapt step (e.g., primer removal) will handle full excision of both index and primer in a single pass. Use `"trim"` if you want the index removed immediately and no downstream trimming step will be applied.
+-   **`cut_max_n`** **(`--max-n`)** — Maximum number of N bases tolerated per biological read before discarding it. Set to `NA` to disable this filter entirely. Note that this filter applies to the sequencing reads (FASTQ) only, not to the index FASTA. The N-padding present in raw index sequences is already stripped by the function before writing the FASTA file
+
+-   **`cut_match_wildcards`** **(`--match-read-wildcards`)** — Enables IUPAC wildcard matching in the biological reads. Cutadapt already interprets N's in the index FASTA as wildcards by default (adapter-side wildcard matching). Enabling this parameter additionally allows an N in a biological read to match any defined base in the index reference.
+
+    The function's default is `TRUE`. This is appropriate when your sequencing reads may carry N's at positions overlapping the index region (e.g., in low-complexity or low-quality cycles at the beginning of a read). If your reads are consistently high-quality at the index region, setting this to `FALSE` will be more stringent. **Warning:** enabling wildcard matching in reads with very short index queries can increase false-positive matches — validate your demultiplexing rate in the output log before proceeding.
+
+-   **`cut_discard_untrimmed`** **(`--discard-untrimmed`)** — Whether to discard read pairs where no index was found. Set to `TRUE` (the default) to keep only reads assigned to a known sample. A high untrimmed rate (\> 20% of raw reads) suggests a mismatch between the index sequences in the configuration table and those actually used during library preparation — cross-check with your sequencing center's sample sheet before proceeding.
+
+-   **`cut_action`** **(`--action`)** — What Cutadapt does with the matched index sequence after assignment. `"retain"` keeps the index in the read after trimming any flanking unmatched sequence, which is appropriate when a downstream Cutadapt step (e.g., primer removal) will handle full excision of both index and primer in a single pass. Use `"trim"` if you want the index removed immediately and no downstream trimming step will be applied. Note that `--action=retain` is incompatible with Cutadapt's `--times` option.
 
 [**Checking demultiplexing efficiency**]{.underline}
 
@@ -246,57 +247,49 @@ After running, inspect the PDF plot and the log file generated by `dmx_metabar2`
 -   **Run demultiplexing function.** Iterates over libraries in the configuration table (`primers_n_samples`) and applies the custom `dmx_metabar2` function to split samples using the index information.
 
     ```{r}
-    # Identify all unique libraries
-    all_Libs <- unique(primers_n_samples$Lib)
-    all_Libs
-
-    # Loop over libraries and run demultiplexing
+    # Separate libraries
+    all_Libs <- primers_n_samples$Lib %>% BiocGenerics::unique()
+    
+    # Loop over projects and run demultiplexing
     for (LIB in all_Libs) {
       
-     # Filter metadata for current library
-    primers_n_samples_lib <- primers_n_samples %>%
-     dplyr::filter(Lib %in% c(LIB))
+      # Filter data for current project
+      LIB_data <- primers_n_samples %>% 
+        dplyr::filter(Lib == LIB)
       
-    # Define raw R1/R2 file paths
-    raw_files <- primers_n_samples_lib %>%
-      dplyr::pull(`Undemultiplexed.path`) %>%
-      BiocGenerics::unique() %>%
-      list.files(full.names = T) %>%
-      normalizePath()
+      # Extract directories (using unique to get the single value for this project)
+      raw_dir <- BiocGenerics::unique(LIB_data$`Undemultiplexed path`)
+      out_dir <- BiocGenerics::unique(LIB_data$`Raw data path`)
       
-    # Set project parameters
-    out_path <- primers_n_samples_lib %>%
-      dplyr::pull(`Raw.data.path`) %>%
-      BiocGenerics::unique()
-
-    project  <-primers_n_samples_lib$Project %>%
-      BiocGenerics::unique()
-
-    # Run demultiplexing
-    dmx_metabar(
-      undmx_file_R1 = raw_files[1], #raw R1
-      undmx_file_R2 = raw_files[2], #raw R2
-      out_path = out_path,
-      project = project,
-      Unique_File_name = primers_n_samples_lib$Unique_File_name,
-      primers = primers_n_samples_lib$Primer,
-      samples_names = primers_n_samples_lib$Sample,
-      idxs_FWD_seqs = primers_n_samples_lib$`Index.sequence.FWD`,
-      idxs_FWD_names = primers_n_samples_lib$`Index.name.REV`,
-      idxs_REV_seqs = primers_n_samples_lib$`Index.sequence.REV`,
-      idxs_REV_names = primers_n_samples_lib$`Index.name.FWD`,
-      mixed_orientation = TRUE, # Dual-mixed Library
-      merge_mixed = FALSE, # Output will be 4 files: R1_FWD, R1_REV, R2_FWD and R2_REV
-      query_size = 8, # Matching size (tags have 8 bp)
-      cut_error_rate = 0, # Exact match with the tags provided
-      cut_indels = FALSE, # No indels
-      cut_pair_filter = "any",# Discart the pair if ANY read does not have tag
-      cut_max_n = NA, # Don't apply --max-n because the tags have N's
-      cut_match_wildcards = TRUE, # N's will be read as wildcards
-      cut_discard_untrimmed = TRUE, # Discart reads without tags
-      cut_action = "retain" # Retain the tags for the downstream Primer Removal
-    )
-    }
+      # Run demultiplexing
+      tictoc::tic(paste0("Demultiplexing raw data"))
+      
+      dmx_metabar(undmx_file_R1 = list.files(raw_dir, pattern = "_R1.*\\.fastq(\\.gz)?$",
+                                             full.names = TRUE),
+                  undmx_file_R2 = list.files(raw_dir, pattern = "_R2.*\\.fastq(\\.gz)?$",
+                                             full.names = TRUE),
+                  out_path = out_dir,
+                  project = paste0(BiocGenerics::unique(LIB_data$Project), collapse = "-"),
+                  Unique_File_name = LIB_data$Unique_File_name,
+                  primers = LIB_data$Primer,
+                  samples_names = LIB_data$Sample,
+                  idxs_FWD_seqs = LIB_data$`Index sequence FWD`,
+                  idxs_FWD_names = LIB_data$`Index name FWD`,
+                  idxs_REV_seqs = LIB_data$`Index sequence REV`,
+                  idxs_REV_names = LIB_data$`Index name REV`,
+                  cut_threads = 60, # Number of threads
+                  mixed_orientation = TRUE, # Dual-mixed Library
+                  query_size = 20, # Matching size of 46.97%
+                  # query_size = 12, # Matching of 50.64%
+                  # query_size = 8, # Matching of 52.63%
+                  cut_error_rate = 0, # Exact match with the tags provided
+                  cut_indels = FALSE, # No indels
+                  cut_pair_filter = "any",# Discart the pair if ANY read does not have tag
+                  cut_max_n = 0, # Discart the pair if one of reads contains N bases
+                  cut_action = "retain" # Retain the tags for the downstream Primer Removal
+                )
+      tictoc::toc()
+      }
     ```
 
 ### Quality checking
@@ -307,20 +300,35 @@ The raw sequencing reads are assessed for overall quality before any processing 
 
     ```{r}
     read_files <- primers_n_samples %>%
-      dplyr::mutate(Read_file_pattern = file.path(`Raw data path`,
-                                                  paste0(Unique_File_name, "*"))) %>%
+      dplyr::mutate(Read_file_pattern = file.path(`Raw data path`, paste0(Unique_File_name, "*"))) %>%
       dplyr::pull(Read_file_pattern) %>%
       Sys.glob() %>%
       normalizePath() %>%
       unique()
 
-    read_files
+    # 1. Obtain the size of the demultiplexed files
+    file_sizes <- file.info(read_files)$size
 
-    if (length(read_files) > 0) {
-      message(length(read_files), " read files found for QC.")
-      } else {
-        stop("No read files found for QC. Check `Raw data path` and file names `primers_n_samples`.")
-        }
+    # 2. Filter only the files with real data (bigger than 100 bytes)
+    valid_read_files <- read_files[file_sizes > 100]
+
+    # 3. Calculate how many were empty
+    empty_count <- length(read_files) - length(valid_read_files)
+
+    # 4. Logical verification and messages
+    if (length(valid_read_files) > 0) {
+      message(length(valid_read_files), " read files with actual data found for QC.")
+      
+      if (empty_count > 0) {
+    message("Notice: ", empty_count, " empty files (0 reads) were detected and ignored.")
+      }
+      
+      # Obtain the read_files variable with only the valid files with reads
+      read_files <- valid_read_files
+      
+    } else {
+      stop("Files were found, but ALL of them are empty (0 reads). Check your demultiplexing step or `Raw data path`.")
+    }
     ```
 
 -   **Run FastQC and MultiQC by project.** Creates per‑project folders and runs quality control in batch using system calls.
@@ -2893,7 +2901,7 @@ Although DADA2 produces exact sequence variants (ASVs), biological reality often
                                    sequence = asvs_abd$`ASV Sequence`)
 
     writeXStringSet(XStringSet = DNAStringSet(allasv_fasta_abd$sequence),
-                    filepath = file.path(swarmpath, 
+                    filepath = file.path(swarm_path, 
                                          paste0("analysis-", 
                                                 Sys.Date(), 
                                                 "-ASVs_abd.fasta")))
@@ -2906,23 +2914,23 @@ Although DADA2 produces exact sequence variants (ASVs), biological reality often
     ```{r}
     # Run SWARM via system call (requires SWARM binary in PATH)
     swarm_cmd <- paste0("swarm -t 50 ",
-                        file.path(swarmpath, 
+                        file.path(swarm_path, 
                                   paste0("analysis-", 
                                          Sys.Date(),
                                          "-ASVs_abd.fasta")),
-                        " -s ", file.path(swarmpath,
+                        " -s ", file.path(swarm_path,
                                           paste0("analysis-",
                                                  Sys.Date(),
                                                  "-swarm.stats")),
-                        " -o ", file.path(swarmpath,
+                        " -o ", file.path(swarm_path,
                                           paste0("analysis-",
                                                  Sys.Date(),
                                                  "-swarm.out")),
-                        " -w ", file.path(swarmpath,
+                        " -w ", file.path(swarm_path,
                                           paste0("analysis-",
                                                  Sys.Date(),
                                                  "-swarm-representativeOTUs.fasta")),
-                        " -i ", file.path(swarmpath,
+                        " -i ", file.path(swarm_path,
                                           paste0("analysis-",
                                                  Sys.Date(),
                                                  "-swarm.structure")),
@@ -2931,11 +2939,11 @@ Although DADA2 produces exact sequence variants (ASVs), biological reality often
     system2(command = "swarm", args = swarm_cmd)
 
     # Verify SWARM completed successfully
-    swarm_out <- list.files(path = swarmpath, pattern = "swarm\\.out", full.names = TRUE)
+    swarm_out <- list.files(path = swarm_path, pattern = "swarm\\.out", full.names = TRUE)
     if (length(swarm_out) > 0) {
       message("SWARM clustering completed successfully!")
     } else {
-      stop("SWARM failed. Check swarmpath and binary installation.")
+      stop("SWARM failed. Check swarm path and binary installation.")
     }
     ```
 
